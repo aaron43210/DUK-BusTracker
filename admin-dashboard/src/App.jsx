@@ -22,6 +22,9 @@ import {
 } from 'react-router-dom';
 
 import { setToken, clearToken } from './api.js'; // token management from our API module
+import { Settings as SettingsIcon, LogOut, Menu, X, FileText, BusFront, LayoutDashboard } from 'lucide-react';
+
+import dukLogo from './assets/duk_logo.png';
 
 // Import every page component
 import Login from './pages/Login.jsx';
@@ -166,7 +169,7 @@ function DashboardShell({ onLogout }) {
         {/* Brand / logo block */}
         <div className="brand" style={{ padding: '0 8px 20px', justifyContent: 'center' }}>
           <img
-            src="/src/assets/duk_logo.png"
+            src={dukLogo}
             alt="DUK Logo"
             style={{
               width: '100%',       /* Fill the available sidebar width */
