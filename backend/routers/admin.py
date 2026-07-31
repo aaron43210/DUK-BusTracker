@@ -611,7 +611,7 @@ async def _apply_map_matching(
     if len(raw_points) < 2:
         return raw_points
 
-    osrm_url = "http://127.0.0.1:5001/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?geometries=geojson&overview=full"
+    osrm_url = "https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?geometries=geojson&overview=full"
     
     # Limit concurrency to prevent socket exhaustion (Too many open files)
     sem = asyncio.Semaphore(100)
