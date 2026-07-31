@@ -1,0 +1,35 @@
+# Secrets — never commit
+.env
+.env.*
+firebase-service-account.json
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+
+# Distribution / build
+*.egg-info/
+dist/
+build/
+
+# Node.js
+node_modules/
+dist-ssr/
+*.local
+
+# macOS
+.DS_Store
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
