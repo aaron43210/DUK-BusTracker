@@ -7,6 +7,7 @@
 import React, { useState } from 'react'; // React + state hook
 import { login, setToken } from '../api.js'; // API functions
 import { useToast } from '../App.jsx'; // Toast notification
+import dukLogo from '../assets/duk_logo.png'; // API functions
 
 // Login component
 // onLogin(token) is received from App.jsx
@@ -87,7 +88,7 @@ function Login({ onLogin }) {
 
           {/* University logo */}
           <img
-            src="/src/assets/duk_logo.png"
+            src={dukLogo}
             alt="Digital University Kerala"
             style={{
 
