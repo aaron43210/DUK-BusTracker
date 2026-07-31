@@ -85,6 +85,7 @@ app.add_middleware(
         "https://103.156.188.51",
         "https://duk.ac.in",
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
