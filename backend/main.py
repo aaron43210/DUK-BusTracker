@@ -75,16 +75,7 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",  # Vite dev server (React admin dashboard)
-        "http://localhost:8081",  # Expo dev server
-        "http://localhost:8082",  # Expo dev server (alt port)
-        "http://localhost:8083",  # Expo dev server (alt port)
-        "http://localhost:19006", # Expo web
-        "https://103.156.188.51",
-        "https://duk.ac.in",
-    ],
+    
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_origins=["*"],
     allow_credentials=False,
