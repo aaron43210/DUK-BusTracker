@@ -9,7 +9,7 @@ import math
 
 logger = logging.getLogger(__name__)
 
-OSRM_BASE_URL = "https://router.project-osrm.org"
+OSRM_BASE_URL = "http://localhost:5001"
 
 def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Straight-line fallback distance in metres."""
