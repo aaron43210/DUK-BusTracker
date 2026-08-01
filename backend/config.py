@@ -30,9 +30,6 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str
     SMTP_FROM: str
 
-    # ── Firebase FCM (fill in when ready) ────────────────────────────────────
-    FCM_SERVER_KEY: str
-    FIREBASE_PROJECT_ID: str
 
     # ── Allowed email domain ──────────────────────────────────────────────────
     ALLOWED_EMAIL_DOMAIN: str = "duk.ac.in"
