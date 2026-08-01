@@ -158,8 +158,8 @@ function DashboardShell({ onLogout }) {
     <div className="shell"> {/* two-column flex container from index.css */}
 
       {/* Mobile overlay (closes menu when clicked) */}
-      <div 
-        className={`sidebar-overlay ${mobileMenuOpen ? 'mobile-open' : ''}`} 
+      <div
+        className={`sidebar-overlay ${mobileMenuOpen ? 'mobile-open' : ''}`}
         onClick={() => setMobileMenuOpen(false)}
       ></div>
 
