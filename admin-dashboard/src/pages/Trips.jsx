@@ -14,6 +14,22 @@ function totalMinsIST() {
   const ist = nowIST();
   return ist.getUTCHours() * 60 + ist.getUTCMinutes();
 }
+function todayIST() {
+  return nowIST().toISOString().split('T')[0];
+}
+function isTimeWindowPassed(isoDate, dir) {
+  const today = todayIST();
+  if (isoDate < today) return true;
+  if (isoDate > today) return false;
+  const mins = totalMinsIST();
+  if (dir === 'forward') {
+    return mins >= 11 * 60; // Morning window ends at 11:00 AM (660 mins)
+  }
+  if (dir === 'reverse') {
+    return mins >= 20 * 60 + 30; // Evening window ends at 8:30 PM (1230 mins)
+  }
+  return false;
+}
 
 // ── Action visibility rules ───────────────────────────────────────────────────
 
@@ -65,7 +81,7 @@ function getTripStatus(trips, isoDate, direction) {
   return t ? t.status : null;
 }
 
-// ── Smart trip log — 5 upcoming + 5 past, always show special/cancelled ────────
+// ── Smart trip log — All upcoming scheduled + 5 most recent past, always show cancelled ────────
 function buildLogRows(trips) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
@@ -81,9 +97,9 @@ function buildLogRows(trips) {
     else                          upcoming.push(t);
   }
 
-  // 5 closest upcoming + 5 most recent past, then all forced rows
+  // All upcoming trips (so none are hidden) + 5 most recent completed past trips
   const sliced = [
-    ...upcoming.slice(-5),
+    ...upcoming,
     ...past.slice(0, 5),
   ];
 
@@ -424,9 +440,11 @@ useEffect(() => {
             Revoke Range
           </button>
           <button className="btn btn-ghost btn-sm" onClick={() => {
+            const today = todayIST();
+            const morningPassed = isTimeWindowPassed(today, 'forward');
             setSpecialModal(true);
-            setTripDate(new Date().toISOString().split('T')[0]);
-            setDirection('forward');
+            setTripDate(today);
+            setDirection(morningPassed ? 'reverse' : 'forward');
             setCreateReturn(false);
           }}>
             Special Service
@@ -436,7 +454,7 @@ useEffect(() => {
 
       {/* Trips table */}
       <div className="card">
-        <div className="card-title">Trip Log — 5 Upcoming + 5 Recent (Cancelled always shown)</div>
+        <div className="card-title">Trip Log — Upcoming Scheduled Trips & Recent History</div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -582,60 +600,101 @@ useEffect(() => {
       </Modal>
 
       {/* ── Special Service modal ── */}
-      <Modal open={specialModal} onClose={() => setSpecialModal(false)} title="Create Special Service"
-        footer={<>
-          <button className="btn btn-ghost" onClick={() => setSpecialModal(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={submitSpecialService}
-            disabled={submitting || getTripStatus(trips, tripDate, direction) !== null}>
-            {submitting ? 'Creating…' : 'Create Trip'}
-          </button>
-        </>}
-      >
-        <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-          Use this for <strong>weekends or public holidays</strong> when the bus runs outside the regular schedule.
-          If a trip already exists for the selected date and direction it cannot be duplicated.
-        </p>
-        <div className="form-group">
-          <label className="form-label">Date</label>
-          <input type="date" className="form-input" value={tripDate}
-            min={new Date().toISOString().split('T')[0]}
-            onChange={e => setTripDate(e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Direction</label>
-          <select className="form-select" value={direction} onChange={e => setDirection(e.target.value)}>
-            <option value="forward"
-              disabled={getTripStatus(trips, tripDate, 'forward') !== null}>
-              Morning — Central Poly to DUK
-              {getTripStatus(trips, tripDate, 'forward') !== null ? ' (already exists)' : ''}
-            </option>
-            <option value="reverse"
-              disabled={getTripStatus(trips, tripDate, 'reverse') !== null}>
-              Evening — DUK to Central Poly
-              {getTripStatus(trips, tripDate, 'reverse') !== null ? ' (already exists)' : ''}
-            </option>
-          </select>
-        </div>
-        {getTripStatus(trips, tripDate, direction) !== null && (
-          <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '6px' }}>
-            A trip already exists for this date and direction ({getTripStatus(trips, tripDate, direction)}). Use Pre-Cancel or Revoke to manage it.
-          </p>
-        )}
-        {direction === 'forward' && getTripStatus(trips, tripDate, direction) === null && (
-          <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <input type="checkbox" id="create_return_cb" checked={createReturn}
-              onChange={e => setCreateReturn(e.target.checked)}
-              disabled={getTripStatus(trips, tripDate, 'reverse') !== null}
-              style={{ width: '16px', height: '16px', cursor: getTripStatus(trips, tripDate, 'reverse') !== null ? 'not-allowed' : 'pointer' }} />
-            <label htmlFor="create_return_cb"
-              style={{ fontSize: '14px', cursor: getTripStatus(trips, tripDate, 'reverse') !== null ? 'not-allowed' : 'pointer',
-                       color: getTripStatus(trips, tripDate, 'reverse') !== null ? 'var(--text-muted)' : 'inherit' }}>
-              Also schedule the return Evening trip
-              {getTripStatus(trips, tripDate, 'reverse') !== null ? ' (Evening already exists)' : ''}
-            </label>
-          </div>
-        )}
-      </Modal>
+      {(() => {
+        const morningPassed = isTimeWindowPassed(tripDate, 'forward');
+        const eveningPassed = isTimeWindowPassed(tripDate, 'reverse');
+        const forwardExists = getTripStatus(trips, tripDate, 'forward') !== null;
+        const reverseExists = getTripStatus(trips, tripDate, 'reverse') !== null;
+
+        const forwardDisabled = forwardExists || morningPassed;
+        const reverseDisabled = reverseExists || eveningPassed;
+
+        const isCurrentDisabled = direction === 'forward' ? forwardDisabled : reverseDisabled;
+        const allDisabled = forwardDisabled && reverseDisabled;
+
+        return (
+          <Modal open={specialModal} onClose={() => setSpecialModal(false)} title="Create Special Service"
+            footer={<>
+              <button className="btn btn-ghost" onClick={() => setSpecialModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitSpecialService}
+                disabled={submitting || isCurrentDisabled}>
+                {submitting ? 'Creating…' : 'Create Trip'}
+              </button>
+            </>}
+          >
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              Use this for <strong>weekends or public holidays</strong> when the bus runs outside the regular schedule.
+              If a trip already exists or its scheduled time window has passed, it cannot be created.
+            </p>
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input type="date" className="form-input" value={tripDate}
+                min={todayIST()}
+                onChange={e => {
+                  const newDate = e.target.value;
+                  setTripDate(newDate);
+                  if (isTimeWindowPassed(newDate, 'forward') && !isTimeWindowPassed(newDate, 'reverse')) {
+                    setDirection('reverse');
+                  }
+                }} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Direction</label>
+              <select className="form-select" value={direction} onChange={e => setDirection(e.target.value)}>
+                <option value="forward" disabled={forwardDisabled}>
+                  Morning — Central Poly to DUK
+                  {forwardExists
+                    ? ` (${getTripStatus(trips, tripDate, 'forward')})`
+                    : morningPassed
+                    ? ' (time passed — after 11:00 AM)'
+                    : ''}
+                </option>
+                <option value="reverse" disabled={reverseDisabled}>
+                  Evening — DUK to Central Poly
+                  {reverseExists
+                    ? ` (${getTripStatus(trips, tripDate, 'reverse')})`
+                    : eveningPassed
+                    ? ' (time passed — after 8:30 PM)'
+                    : ''}
+                </option>
+              </select>
+            </div>
+
+            {allDisabled && (
+              <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px', padding: '8px 12px', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '6px' }}>
+                All trip slots for this date have either already completed or already exist. Please select an upcoming date.
+              </p>
+            )}
+
+            {!allDisabled && forwardExists && direction === 'forward' && (
+              <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '6px' }}>
+                A trip already exists for this date and direction ({getTripStatus(trips, tripDate, direction)}). Use Pre-Cancel or Revoke to manage it.
+              </p>
+            )}
+
+            {!allDisabled && reverseExists && direction === 'reverse' && (
+              <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '6px' }}>
+                A trip already exists for this date and direction ({getTripStatus(trips, tripDate, direction)}). Use Pre-Cancel or Revoke to manage it.
+              </p>
+            )}
+
+            {direction === 'forward' && !forwardDisabled && (
+              <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input type="checkbox" id="create_return_cb" checked={createReturn}
+                  onChange={e => setCreateReturn(e.target.checked)}
+                  disabled={reverseDisabled}
+                  style={{ width: '16px', height: '16px', cursor: reverseDisabled ? 'not-allowed' : 'pointer' }} />
+                <label htmlFor="create_return_cb"
+                  style={{ fontSize: '14px', cursor: reverseDisabled ? 'not-allowed' : 'pointer',
+                           color: reverseDisabled ? 'var(--text-muted)' : 'inherit' }}>
+                  Also schedule the return Evening trip
+                  {reverseExists ? ' (Evening already exists)' : eveningPassed ? ' (Evening time passed)' : ''}
+                </label>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
 
       {/* ── Pre-Cancel modal ── */}
       <Modal open={preCancelModal} onClose={() => setPreCancelModal(false)} title="Pre-Cancel Trip"
