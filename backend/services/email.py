@@ -22,15 +22,7 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
     """
     Send an OTP verification email.
     Returns True on success, False on failure.
-    Credentials are loaded from environment — safe to deploy with placeholder values
-    during development (will log a warning instead of crashing).
     """
-    if settings.SMTP_PASSWORD == "PLACEHOLDER":
-        logger.warning(
-            "[EMAIL] SMTP not configured. OTP for %s: %s (dev-only log)", to_email, otp
-        )
-        return True  # pretend success in dev mode
-
     html_body = f"""
     <!DOCTYPE html>
     <html>

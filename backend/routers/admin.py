@@ -21,7 +21,7 @@ from models.notification import AdminBroadcast, Suggestion, ScheduledNotificatio
 from services.firebase import broadcast_to_all_users
 from services.trip_lifecycle import auto_complete_expired_trips
 from config import get_settings
-from constants import IST_OFFSET
+from constants import IST_OFFSET, MORNING_END_MINS, EVENING_END_MINS
 
 logger   = logging.getLogger(__name__)
 settings = get_settings()
@@ -205,6 +205,29 @@ async def create_trip(
 ):
     # Parse date or default to today
     d = date.fromisoformat(trip_date) if trip_date else date.today()
+
+    # ── Guard: block past dates or expired time windows on today ─────────────
+    now_ist = datetime.now(timezone.utc) + IST_OFFSET
+    today_ist = now_ist.date()
+    now_mins = now_ist.hour * 60 + now_ist.minute
+
+    if d < today_ist:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot create a special service trip for a past date.",
+        )
+
+    if d == today_ist:
+        if direction == "forward" and now_mins >= MORNING_END_MINS:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot create a Morning trip for today — the morning window (07:00–11:00 AM) has already passed.",
+            )
+        if direction == "reverse" and now_mins >= EVENING_END_MINS:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot create an Evening trip for today — the evening window (05:30–08:30 PM) has already passed.",
+            )
 
     # ── Guard: block if a trip already exists for this date+direction ─────────
     existing = (await db.execute(
