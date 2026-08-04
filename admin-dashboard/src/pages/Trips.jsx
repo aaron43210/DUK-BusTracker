@@ -86,15 +86,15 @@ function buildLogRows(trips) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   const upcoming = []; // scheduled / waiting — future or today
-  const past     = []; // completed, on_trip  — past
-  const always   = []; // cancelled or special-service — always shown
+  const past = []; // completed, on_trip  — past
+  const always = []; // cancelled or special-service — always shown
 
   for (const t of trips) {
     const d = new Date(t.date + 'T00:00:00');
     // Cancelled trips always appear (could be pre-cancelled upcoming or past)
     if (t.status === 'cancelled') { always.push(t); continue; }
     if (t.status === 'completed') past.push(t);
-    else                          upcoming.push(t);
+    else upcoming.push(t);
   }
 
   // All upcoming trips (so none are hidden) + 5 most recent completed past trips
@@ -117,14 +117,14 @@ function buildLogRows(trips) {
 // ── Status badge ──────────────────────────────────────────────────────────────
 function statusBadge(s) {
   const map = {
-    active:      'badge-green',
-    waiting:     'badge-blue',
-    scheduled:   'badge-blue',
-    on_trip:     'badge-green',
-    completed:   'badge-gray',
-    offline:     'badge-gray',
-    cancelled:   'badge-red',
-    late:        'badge-yellow',
+    active: 'badge-green',
+    waiting: 'badge-blue',
+    scheduled: 'badge-blue',
+    on_trip: 'badge-green',
+    completed: 'badge-gray',
+    offline: 'badge-gray',
+    cancelled: 'badge-red',
+    late: 'badge-yellow',
     stop_change: 'badge-yellow',
   };
 
@@ -147,14 +147,14 @@ function statusBadge(s) {
 
 // ── Human-readable date ───────────────────────────────────────────────────────
 function friendlyDate(isoDate) {
-  const today     = new Date(); today.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-  const tomorrow  = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  const d         = new Date(isoDate + 'T00:00:00');
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const d = new Date(isoDate + 'T00:00:00');
 
-  if (d.getTime() === today.getTime())     return 'Today';
+  if (d.getTime() === today.getTime()) return 'Today';
   if (d.getTime() === yesterday.getTime()) return 'Yesterday';
-  if (d.getTime() === tomorrow.getTime())  return 'Tomorrow';
+  if (d.getTime() === tomorrow.getTime()) return 'Tomorrow';
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
@@ -178,54 +178,54 @@ function Modal({ open, onClose, title, children, footer }) {
 export default function Trips() {
   const showToast = useToast();
 
-  const [trips,     setTrips]     = useState([]);
-  const [loading,   setLoading]   = useState(true);
+  const [trips, setTrips] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [isWeekend, setIsWeekend] = useState(false);
 
   // Mark Late modal
-  const [lateModal,   setLateModal]   = useState(false);
-  const [lateTripId,  setLateTripId]  = useState(null);
+  const [lateModal, setLateModal] = useState(false);
+  const [lateTripId, setLateTripId] = useState(null);
   const [lateMinutes, setLateMinutes] = useState('');
-  const [lateReason,  setLateReason]  = useState('');
+  const [lateReason, setLateReason] = useState('');
 
   // Cancel modal
-  const [cancelModal,  setCancelModal]  = useState(false);
+  const [cancelModal, setCancelModal] = useState(false);
   const [cancelTripId, setCancelTripId] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
 
   // Stop Change modal
-  const [stopModal,   setStopModal]   = useState(false);
-  const [stopTripId,  setStopTripId]  = useState(null);
+  const [stopModal, setStopModal] = useState(false);
+  const [stopTripId, setStopTripId] = useState(null);
   const [stopMessage, setStopMessage] = useState('');
 
   // Special Service modal
   const [specialModal, setSpecialModal] = useState(false);
-  const [direction,    setDirection]    = useState('forward');
-  const [tripDate,     setTripDate]     = useState(() => new Date().toISOString().split('T')[0]);
+  const [direction, setDirection] = useState('forward');
+  const [tripDate, setTripDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [createReturn, setCreateReturn] = useState(false);
 
   // Pre-Cancel modal state
-  const [preCancelModal,    setPreCancelModal]    = useState(false);
-  const [pcMode,            setPcMode]            = useState('single'); // 'single' | 'range'
-  const [pcDate,            setPcDate]            = useState(() => new Date().toISOString().split('T')[0]);
-  const [pcDateFrom,        setPcDateFrom]        = useState(() => new Date().toISOString().split('T')[0]);
-  const [pcDateTo,          setPcDateTo]          = useState(() => new Date().toISOString().split('T')[0]);
-  const [pcDirection,       setPcDirection]       = useState('forward');
-  const [pcAlsoReturn,      setPcAlsoReturn]      = useState(false);
-  const [pcReason,          setPcReason]          = useState('');
+  const [preCancelModal, setPreCancelModal] = useState(false);
+  const [pcMode, setPcMode] = useState('single'); // 'single' | 'range'
+  const [pcDate, setPcDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [pcDateFrom, setPcDateFrom] = useState(() => new Date().toISOString().split('T')[0]);
+  const [pcDateTo, setPcDateTo] = useState(() => new Date().toISOString().split('T')[0]);
+  const [pcDirection, setPcDirection] = useState('forward');
+  const [pcAlsoReturn, setPcAlsoReturn] = useState(false);
+  const [pcReason, setPcReason] = useState('');
 
   // Revoke Cancel modal (single)
-  const [revokeModal,  setRevokeModal]  = useState(false);
+  const [revokeModal, setRevokeModal] = useState(false);
   const [revokeTripId, setRevokeTripId] = useState(null);
   const [revokeReason, setRevokeReason] = useState('');
 
   // Revoke Range modal
-  const [revokeRangeModal,    setRevokeRangeModal]    = useState(false);
-  const [revokeRangeTripIds,  setRevokeRangeTripIds]  = useState([]);  // trip IDs user selected
+  const [revokeRangeModal, setRevokeRangeModal] = useState(false);
+  const [revokeRangeTripIds, setRevokeRangeTripIds] = useState([]);  // trip IDs user selected
   const [revokeRangeCandidates, setRevokeRangeCandidates] = useState([]); // all cancelled trips
-  const [revokeRangeReason,   setRevokeRangeReason]   = useState('');
+  const [revokeRangeReason, setRevokeRangeReason] = useState('');
   const [revokeRangeDateFrom, setRevokeRangeDateFrom] = useState('');
-  const [revokeRangeDateTo,   setRevokeRangeDateTo]   = useState('');
+  const [revokeRangeDateTo, setRevokeRangeDateTo] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -240,32 +240,28 @@ export default function Trips() {
     }
   }
 
-// Runs only once when the Trips page loads
-useEffect(() => {
+  // Runs only once when the Trips page loads
+  useEffect(() => {
+    // Function to initialize the page
+    async function init() {
+      try {
+        // Create today's trips if they don't already exist
+        const result = await ensureTodayTrips();
 
-  // Function to initialize the page
-  async function init() {
-    try {
+        // Check whether today is a weekend
+        if (result.weekend)
+          setIsWeekend(true);
+      } catch (_) {
+        // Ignore any errors (not critical)
+      }
 
-      // Create today's trips if they don't already exist
-      const result = await ensureTodayTrips();
-
-      // Check whether today is a weekend
-      if (result.weekend)
-        setIsWeekend(true);
-
-    } catch (_) {
-      // Ignore any errors (not critical)
+      // Fetch all trips from the backend
+      await fetchTrips();
     }
 
-    // Fetch all trips from the backend
-    await fetchTrips();
-  }
-
-  // Call the initialization function
-  init();
-
-}, []); // Empty array → run only once when the component is mounted
+    // Call the initialization function
+    init();
+  }, []); // Empty array → run only once when the component is mounted
 
   // ── Mark Late ─────────────────────────────────────────────────────────────
   async function submitLate() {
@@ -331,7 +327,7 @@ useEffect(() => {
         // Range mode — loop dates from pcDateFrom to pcDateTo
         if (!pcDateFrom || !pcDateTo) { showToast('Please select both From and To dates', 'error'); setSubmitting(false); return; }
         const from = new Date(pcDateFrom + 'T00:00:00');
-        const to   = new Date(pcDateTo   + 'T00:00:00');
+        const to = new Date(pcDateTo + 'T00:00:00');
         if (from > to) { showToast('From date must be before To date', 'error'); setSubmitting(false); return; }
 
         // Build list of all dates in range
@@ -343,8 +339,10 @@ useEffect(() => {
 
         const results = await Promise.allSettled(
           datesToCancel.map(dt =>
-            cancelAdvanceTrip({ trip_date: dt, direction: pcDirection,
-              also_cancel_return: pcAlsoReturn, reason: pcReason.trim() })
+            cancelAdvanceTrip({
+              trip_date: dt, direction: pcDirection,
+              also_cancel_return: pcAlsoReturn, reason: pcReason.trim()
+            })
           )
         );
         const ok = results.filter(r => r.status === 'fulfilled').length;
@@ -382,7 +380,7 @@ useEffect(() => {
   // Filter candidates when date range is set
   const filteredCandidates = revokeRangeCandidates.filter(t => {
     if (revokeRangeDateFrom && t.date < revokeRangeDateFrom) return false;
-    if (revokeRangeDateTo   && t.date > revokeRangeDateTo)   return false;
+    if (revokeRangeDateTo && t.date > revokeRangeDateTo) return false;
     return true;
   });
 
@@ -418,7 +416,7 @@ useEffect(() => {
           <div className="page-sub">
             {isWeekend
               ? 'Weekend — use Special Service to create a trip if needed'
-              : "Today's Morning and Evening trips are auto-scheduled"}
+              : "From Monday to Friday, Morning and Evening trips are auto-scheduled"}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -525,6 +523,7 @@ useEffect(() => {
         </div>
       </div>
 
+
       {/* ── Mark Late modal ── */}
       <Modal open={lateModal} onClose={() => setLateModal(false)} title="Mark Trip as Late"
         footer={<>
@@ -563,7 +562,7 @@ useEffect(() => {
             </>}
           >
             {isOnTrip && (
-              <div style={{ padding: '12px', backgroundColor: 'var(--bg-warn)', color: '#854d0e', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
+              <div style={{ padding: '12px', backgroundColor: 'var(--bg-warn)', color: '#854d0e', borderRadius: '0', marginBottom: '16px', fontSize: '13px' }}>
                 <strong>Warning:</strong> This bus is currently on its route! Cancelling it will immediately stop live tracking and notify all users.
               </div>
             )}
@@ -646,22 +645,22 @@ useEffect(() => {
                   {forwardExists
                     ? ` (${getTripStatus(trips, tripDate, 'forward')})`
                     : morningPassed
-                    ? ' (time passed — after 11:00 AM)'
-                    : ''}
+                      ? ' (time passed — after 11:00 AM)'
+                      : ''}
                 </option>
                 <option value="reverse" disabled={reverseDisabled}>
                   Evening — DUK to Central Poly
                   {reverseExists
                     ? ` (${getTripStatus(trips, tripDate, 'reverse')})`
                     : eveningPassed
-                    ? ' (time passed — after 8:30 PM)'
-                    : ''}
+                      ? ' (time passed — after 8:30 PM)'
+                      : ''}
                 </option>
               </select>
             </div>
 
             {allDisabled && (
-              <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px', padding: '8px 12px', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '6px' }}>
+              <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px', padding: '8px 12px', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '0' }}>
                 All trip slots for this date have either already completed or already exist. Please select an upcoming date.
               </p>
             )}
@@ -685,8 +684,10 @@ useEffect(() => {
                   disabled={reverseDisabled}
                   style={{ width: '16px', height: '16px', cursor: reverseDisabled ? 'not-allowed' : 'pointer' }} />
                 <label htmlFor="create_return_cb"
-                  style={{ fontSize: '14px', cursor: reverseDisabled ? 'not-allowed' : 'pointer',
-                           color: reverseDisabled ? 'var(--text-muted)' : 'inherit' }}>
+                  style={{
+                    fontSize: '14px', cursor: reverseDisabled ? 'not-allowed' : 'pointer',
+                    color: reverseDisabled ? 'var(--text-muted)' : 'inherit'
+                  }}>
                   Also schedule the return Evening trip
                   {reverseExists ? ' (Evening already exists)' : eveningPassed ? ' (Evening time passed)' : ''}
                 </label>
@@ -844,13 +845,15 @@ useEffect(() => {
           </div>
         )}
         {/* Trip checkboxes */}
-        <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px' }}>
+        <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '0', padding: '8px' }}>
           {filteredCandidates.length === 0 ? (
             <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>No cancelled trips in this range.</p>
           ) : filteredCandidates.map(t => (
-            <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '10px',
+            <label key={t.id} style={{
+              display: 'flex', alignItems: 'center', gap: '10px',
               padding: '8px', borderRadius: '6px', cursor: 'pointer',
-              background: revokeRangeTripIds.includes(t.id) ? 'var(--primary-light, rgba(99,102,241,0.08))' : 'transparent' }}>
+              background: revokeRangeTripIds.includes(t.id) ? 'var(--primary-light, rgba(99,102,241,0.08))' : 'transparent'
+            }}>
               <input type="checkbox"
                 checked={revokeRangeTripIds.includes(t.id)}
                 onChange={e => setRevokeRangeTripIds(prev =>
@@ -862,8 +865,10 @@ useEffect(() => {
                 {t.direction === 'forward' ? 'Morning' : 'Evening'}
               </span>
               {t.cancellation_reason && (
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto',
-                  maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{
+                  fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto',
+                  maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                }}>
                   {t.cancellation_reason}
                 </span>
               )}

@@ -156,7 +156,7 @@ export default function Suggestions() {
                     <td style={{ lineHeight: '1.6' }}>
                       <div style={{fontWeight: 500, color: 'var(--text)'}}>{s.suggestion}</div>
                       {s.admin_response && (
-                        <div style={{ marginTop: '8px', padding: '8px', background: 'var(--surface2)', borderRadius: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        <div style={{ marginTop: '8px', padding: '8px', background: 'var(--surface2)', borderRadius: '0', fontSize: '12px', color: 'var(--text-muted)' }}>
                           <strong>Admin Reply:</strong> {s.admin_response}
                         </div>
                       )}

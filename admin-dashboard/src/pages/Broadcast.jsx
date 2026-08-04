@@ -100,7 +100,7 @@ export default function Broadcast() {
               <div style={{
                 background: 'var(--surface2)',
                 border: '1px solid var(--border)',
-                borderRadius: '8px',
+                borderRadius: '0',
                 padding: '14px 16px',
                 marginBottom: '18px',
               }}>
@@ -153,7 +153,7 @@ export default function Broadcast() {
                 <div style={{
                   background: '#fef3c7',
                   border: '1px solid #fde68a',
-                  borderRadius: '6px',
+                  borderRadius: '0',
                   padding: '10px 14px',
                   fontSize: '13px',
                   color: 'var(--warning)',
@@ -194,7 +194,7 @@ export default function Broadcast() {
               style={{
                 background: 'var(--surface2)',
                 border: '1px solid var(--border)',
-                borderRadius: '6px',
+                borderRadius: '0',
                 padding: '10px 12px',
                 marginBottom: '8px',
                 cursor: 'pointer',

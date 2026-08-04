@@ -51,8 +51,9 @@ async def predict_eta(
     hour_of_day: int,
     day_of_week: int,
     trip_direction: int,      # 0 = morning, 1 = evening
-    elapsed_minutes: float,
-    speed_last_3: float,      # moving avg speed km/h
+    elapsed_minutes: float = 0.0,
+    speed_last_3: float = 25.0, # moving avg speed km/h
+    **kwargs,
 ) -> dict:
     """
     Predict ETA in minutes from current bus position to target stop.

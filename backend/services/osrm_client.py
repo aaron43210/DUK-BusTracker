@@ -6,10 +6,12 @@ Falls back to Haversine straight-line distance if the server is unreachable.
 import httpx
 import logging
 import math
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-OSRM_BASE_URL = "http://localhost:5001"
+OSRM_BASE_URL = "http://127.0.0.1:5001"
+
 
 def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Straight-line fallback distance in metres."""
@@ -24,17 +26,17 @@ def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     )
     return R * 2 * math.asin(math.sqrt(a))
 
+
 async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Fetch the real driving distance in metres from the local OSRM server.
     If the server is down or returns an error, gracefully fallback to Haversine math.
     """
-    # OSRM expects coordinates in lon,lat format
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=false"
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?overview=false"
     
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=2.0)
+        async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
+            resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == "Ok" and data.get("routes"):
@@ -44,6 +46,7 @@ async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float
         
     return haversine_m_math(lat1, lon1, lat2, lon2)
 
+
 async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destinations: list[tuple[float, float]]) -> list[float]:
     """
     Fetch the real driving distances from a single source to multiple destinations using the OSRM /table API.
@@ -52,36 +55,33 @@ async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destination
     if not destinations:
         return []
         
-    coords = [f"{src_lon},{src_lat}"]
+    coords = [f"{src_lon:.6f},{src_lat:.6f}"]
     for (lat, lon) in destinations:
-        coords.append(f"{lon},{lat}")
+        coords.append(f"{lon:.6f},{lat:.6f}")
         
     coords_str = ";".join(coords)
     url = f"{OSRM_BASE_URL}/table/v1/driving/{coords_str}?sources=0&annotations=distance"
     
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=2.0)
+        async with httpx.AsyncClient(trust_env=False, timeout=3.0) as client:
+            resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == "Ok" and data.get("distances"):
-                    # distances[0] is the array of distances from source (0) to all points (including itself at index 0)
-                    # We slice from [1:] to skip the distance to itself.
                     dists = data["distances"][0][1:]
                     if len(dists) == len(destinations):
-                        return [float(d) for d in dists]
+                        return [float(d) if d is not None else haversine_m_math(src_lat, src_lon, destinations[i][0], destinations[i][1]) for i, d in enumerate(dists)]
     except Exception as e:
         logger.debug("[OSRM] Failed to fetch distance matrix (fallback to Haversine): %s", e)
         
-    # Fallback
     return [haversine_m_math(src_lat, src_lon, d_lat, d_lon) for (d_lat, d_lon) in destinations]
 
-# Synchronous version for the ML training script
+
 def get_osrm_distance_m_sync(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=false"
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?overview=false"
     try:
-        with httpx.Client() as client:
-            resp = client.get(url, timeout=2.0)
+        with httpx.Client(trust_env=False, timeout=2.0) as client:
+            resp = client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == "Ok" and data.get("routes"):
@@ -89,3 +89,129 @@ def get_osrm_distance_m_sync(lat1: float, lon1: float, lat2: float, lon2: float)
     except Exception:
         pass
     return haversine_m_math(lat1, lon1, lat2, lon2)
+
+
+async def get_osrm_segment_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> List[List[float]]:
+    """
+    Fetch the turn-by-turn road geometry coordinates [[lon, lat], ...] connecting two consecutive points.
+    """
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?overview=full&geometries=geojson"
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("routes") and len(data["routes"]) > 0:
+                    return data["routes"][0]["geometry"]["coordinates"]
+                else:
+                    logger.debug(f"[OSRM] Segment geometry code not Ok: {data.get('code')}")
+            else:
+                logger.debug(f"[OSRM] Segment geometry failed status {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.debug("[OSRM] Failed to fetch segment geometry: %s", e)
+
+    return [[lon1, lat1], [lon2, lat2]]
+
+
+async def get_osrm_route_geometry(coordinates: list[tuple[float, float]]) -> List[List[float]]:
+    """
+    Fetch road-snapped turn-by-turn geometry coordinates [[lon, lat], ...] from OSRM for a list of (lat, lon) waypoints.
+    Routes point-by-point to guarantee high reliability even if some segments are unroutable.
+    """
+    if len(coordinates) < 2:
+        return [[lon, lat] for lat, lon in coordinates]
+
+    full_road_coords = []
+    
+    for i in range(len(coordinates) - 1):
+        lat1, lon1 = coordinates[i]
+        lat2, lon2 = coordinates[i + 1]
+        
+        # We reuse our robust segment fetcher
+        seg_coords = await get_osrm_segment_geometry(lat1, lon1, lat2, lon2)
+        
+        if full_road_coords and seg_coords:
+            # Avoid duplicate points at the stitched boundary
+            full_road_coords.extend(seg_coords[1:])
+        else:
+            full_road_coords.extend(seg_coords)
+            
+    return full_road_coords if full_road_coords else [[lon, lat] for lat, lon in coordinates]
+
+async def get_osrm_match_geometry(coordinates: list[tuple[float, float]]) -> List[List[float]]:
+    """
+    Fetch map-matched route geometry coordinates from OSRM for a GPS trace.
+    OSRM match/v1 snaps noisy points to the logical driven path.
+    """
+    if len(coordinates) < 2:
+        return [[lon, lat] for lat, lon in coordinates]
+
+    full_road_coords = []
+    chunk_size = 90  # OSRM match allows up to 100 points per request
+    for i in range(0, len(coordinates) - 1, chunk_size - 1):
+        chunk = coordinates[i:i + chunk_size]
+        if len(chunk) < 2:
+            continue
+            
+        coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in chunk])
+        url = f"{OSRM_BASE_URL}/match/v1/driving/{coords_str}?overview=full&geometries=geojson&tidy=true"
+        
+        chunk_handled = False
+        try:
+            async with httpx.AsyncClient(trust_env=False, timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("code") == "Ok" and data.get("matchings") and len(data["matchings"]) > 0:
+                        # Find the longest matching or concatenate all matchings for this chunk
+                        pts = []
+                        for m in data["matchings"]:
+                            pts.extend(m["geometry"]["coordinates"])
+                        
+                        if full_road_coords and pts:
+                            full_road_coords.extend(pts[1:])
+                        else:
+                            full_road_coords.extend(pts)
+                        chunk_handled = True
+        except Exception as e:
+            logger.debug("[OSRM] Match geometry error: %s", e)
+            
+        if not chunk_handled:
+            # Fallback to route if match fails
+            try:
+                route_url = f"{OSRM_BASE_URL}/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+                async with httpx.AsyncClient(trust_env=False, timeout=5.0) as client:
+                    resp = await client.get(route_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("code") == "Ok" and data.get("routes") and len(data["routes"]) > 0:
+                            pts = data["routes"][0]["geometry"]["coordinates"]
+                            if full_road_coords and pts:
+                                full_road_coords.extend(pts[1:])
+                            else:
+                                full_road_coords.extend(pts)
+                            chunk_handled = True
+            except Exception:
+                pass
+                
+        if not chunk_handled:
+            # Final fallback: use our robust pairwise routing instead of straight lines
+            try:
+                pairwise_pts = await get_osrm_route_geometry(chunk)
+                if full_road_coords and pairwise_pts:
+                    full_road_coords.extend(pairwise_pts[1:])
+                else:
+                    full_road_coords.extend(pairwise_pts)
+                chunk_handled = True
+            except Exception:
+                pass
+                
+        if not chunk_handled:
+            # Ultimate fallback if everything fails
+            pts = [[lon, lat] for lat, lon in chunk]
+            if full_road_coords and pts:
+                full_road_coords.extend(pts[1:])
+            else:
+                full_road_coords.extend(pts)
+
+    return full_road_coords if full_road_coords else [[lon, lat] for lat, lon in coordinates]

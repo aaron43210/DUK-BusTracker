@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, update
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from database import get_db
 from models.route import Route, BusStop
@@ -61,7 +61,7 @@ async def admin_login(req: LoginRequest):
 # ── Trip Management ───────────────────────────────────────────────────────────
 class TripStatusUpdate(BaseModel):
     trip_id:              int
-    status:               str   # active | completed | cancelled | late | stop_change
+    status:               Literal["active", "cancelled", "late", "stop_change", "scheduled"]
     late_by_minutes:      Optional[int] = None
     cancellation_reason:  Optional[str] = None
     reason:               Optional[str] = None  # general reason field for late / stop_change
@@ -85,6 +85,18 @@ async def update_trip_status(
     if req.cancellation_reason:
         trip.cancellation_reason = req.cancellation_reason
     await db.commit()
+
+    # Broadcast trip status via WebSocket
+    try:
+        from routers.gps import manager
+        await manager.broadcast({
+            "type":      "trip_status",
+            "trip_id":   trip.id,
+            "status":    trip.status,
+            "direction": trip.direction,
+        })
+    except Exception as e:
+        logger.debug("[ADMIN] WebSocket broadcast skipped: %s", e)
 
     # Push notification to all users
     title, body = "", ""

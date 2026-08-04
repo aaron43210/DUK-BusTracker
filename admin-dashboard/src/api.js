@@ -107,6 +107,11 @@ export async function getTripState() {
   return apiFetch('/api/v1/trip_state');
 }
 
+// getTripTrace: GET /api/v1/trip_trace/:trip_id
+export async function getTripTrace(tripId) {
+  return apiFetch(`/api/v1/trip_trace/${tripId}`);
+}
+
 // getStops: GET /api/v1/stops — returns all bus stops (used in map + stops page)
 export async function getStops() {
   return apiFetch('/api/v1/stops');
@@ -247,3 +252,22 @@ export async function updateSuggestion(id, data) {
     body: JSON.stringify(data),
   });
 }
+
+// ── Routing & Geometry ────────────────────────────────────────────────────────
+export async function getRouteGeometry() {
+  return apiFetch('/api/v1/route_geometry');
+}
+
+export async function getRouteSegment(lat1, lon1, lat2, lon2) {
+  return apiFetch(`/api/v1/route_segment?lat1=${lat1}&lon1=${lon1}&lat2=${lat2}&lon2=${lon2}`);
+}
+
+export async function snapRoute(points) {
+  return apiFetch('/api/v1/snap_route', {
+    method: 'POST',
+    body: JSON.stringify({ points }),
+  });
+}
+
+
+

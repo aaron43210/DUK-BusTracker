@@ -1,20 +1,8 @@
-// src/pages/Dashboard.jsx
-// ─────────────────────────────────────────────────────────────────────────────
-// Dashboard — live overview of the bus system.
-// Fetches GPS, trip state, and stops in parallel; auto-refreshes every 10 s.
-// ─────────────────────────────────────────────────────────────────────────────
-
-import React, { useState, useEffect, useRef } from 'react';
-// useState  → holds fetched data and UI state
-// useEffect → side effects: data fetching, interval timer, map init
-// useRef    → stores the interval ID without causing re-renders
-
-import { getLatestGps, getTripState, getStops } from '../api.js';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { getLatestGps, getTripState, getStops, getRouteGeometry, getRouteSegment, getTripTrace } from '../api.js';
 import { useToast } from '../App.jsx';
 import busSvgRaw from '../assets/bus.svg?raw';
 
-// ── Status badge helper ───────────────────────────────────────────────────────
-// Maps a status string to the correct CSS badge class and display label.
 function statusBadge(status) {
   const map = {
     active: { cls: 'badge-green', label: 'Active' },
@@ -30,7 +18,6 @@ function statusBadge(status) {
   return <span className={`badge ${s.cls}`}>{s.label}</span>;
 }
 
-// ── MapLibre (loaded via CDN — no npm bundle, no token needed) ───────────────
 function loadMapLibre(callback) {
   if (window.maplibregl) { callback(); return; }
 
@@ -45,7 +32,55 @@ function loadMapLibre(callback) {
   document.head.appendChild(script);
 }
 
-function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, markerRef) {
+// Distance in km between two lon/lat points
+function haversineDistKm(lon1, lat1, lon2, lat2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+class CenterBusControl {
+  onAdd(map) {
+    this._map = map;
+    this._container = document.createElement('div');
+    this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+    const btn = document.createElement('button');
+    btn.className = 'maplibregl-ctrl-icon';
+    btn.type = 'button';
+    btn.title = 'Recenter on Bus';
+    btn.id = 'recenter-bus-btn';
+    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style="margin: auto; display: block; padding-top: 4px;"><circle cx="12" cy="12" r="3"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line></svg>`;
+
+    btn.onclick = () => window.dispatchEvent(new Event('recenter-bus'));
+
+    this._container.appendChild(btn);
+    return this._container;
+  }
+  onRemove() {
+    this._container.parentNode.removeChild(this._container);
+    this._map = undefined;
+  }
+}
+
+function formatTripName(trip) {
+  if (!trip) return '—';
+  const t = trip.toLowerCase().trim();
+  if (t === 'forward' || t === 'morning') return 'Morning';
+  if (t === 'reverse' || t === 'evening') return 'Evening';
+  if (t === 'unscheduled') return 'Unscheduled';
+  return trip;
+}
+
+function isScheduledTrip(trip) {
+  if (!trip) return false;
+  const t = trip.toLowerCase().trim();
+  return t === 'morning' || t === 'evening' || t === 'forward' || t === 'reverse';
+}
+
+function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, markerRef, isScheduled, tripId, trailCoordsRef) {
   if (!document.getElementById(containerId)) return;
 
   const map = new window.maplibregl.Map({
@@ -56,9 +91,9 @@ function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, marker
   });
   mapRef.current = map;
 
-  map.addControl(new window.maplibregl.NavigationControl(), 'top-right');
+  map.addControl(new window.maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  map.addControl(new CenterBusControl(), 'top-right');
 
-  // Bus marker — custom SVG bus icon (green when live, grey when last-seen/offline)
   const busColor = isLive ? '#16a34a' : '#6b7280';
   const busSvg = busSvgRaw
     .replace(/fill="#000000"/g, `fill="${busColor}"`)
@@ -66,39 +101,107 @@ function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, marker
     .replace(/height="512"/, 'height="100%"');
 
   const busEl = document.createElement('div');
-  busEl.id = 'bus-dot';
-  busEl.innerHTML = busSvg;
-  busEl.style.cssText = [
-    'width:36px', 'height:36px',
-    'cursor:pointer',
-    'filter:drop-shadow(0 3px 8px rgba(0,0,0,0.4))',
-    'transition:transform 0.4s ease-out',
-  ].join(';');
+  busEl.id = 'bus-marker-container';
+  busEl.style.cssText = 'width:36px;height:36px;cursor:pointer;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.4));';
 
-  const popup = new window.maplibregl.Popup({ offset: 16 }).setHTML(
-    isLive
-      ? '<strong>Live Bus</strong><br>Tracking in real-time'
-      : '<strong>Last Known Location</strong><br>Bus is currently offline'
+  const busInner = document.createElement('div');
+  busInner.id = 'bus-dot';
+  busInner.innerHTML = busSvg;
+  busInner.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;transition:transform 0.3s ease-out;';
+  busEl.appendChild(busInner);
+
+  const popup = new window.maplibregl.Popup({ offset: [0, -36] }).setHTML(
+    isLive ? '<strong>Live Bus</strong><br>Tracking in real-time' : '<strong>Last Known Location</strong><br>Bus is currently offline'
   );
 
-  const marker = new window.maplibregl.Marker({ element: busEl })
+  const marker = new window.maplibregl.Marker({ element: busEl, anchor: 'bottom' })
     .setLngLat([busLon, busLat])
     .setPopup(popup)
     .addTo(map);
   markerRef.current = marker;
 
-  // Stop markers — small blue dots
-  (stops || []).forEach(s => {
-    const el = document.createElement('div');
-    el.style.cssText = 'width:10px;height:10px;background:#2563eb;border-radius:50%;border:2px solid white;cursor:pointer';
-    new window.maplibregl.Marker({ element: el })
-      .setLngLat([s.lon, s.lat])
-      .setPopup(new window.maplibregl.Popup({ offset: 10 }).setHTML(`<strong>${s.name}</strong>`))
-      .addTo(map);
+  if (isScheduled) {
+    (stops || []).forEach(s => {
+      const el = document.createElement('div');
+      el.style.cssText = 'width:10px;height:10px;background:#2563eb;border-radius:50%;border:2px solid white;cursor:pointer';
+      new window.maplibregl.Marker({ element: el })
+        .setLngLat([s.lon, s.lat])
+        .setPopup(new window.maplibregl.Popup({ offset: 10 }).setHTML(`<strong>${s.name}</strong>`))
+        .addTo(map);
+    });
+  }
+
+  map.on('dragstart', () => window.dispatchEvent(new Event('map-interaction')));
+  map.on('wheel', () => window.dispatchEvent(new Event('map-interaction')));
+  map.on('touchstart', () => window.dispatchEvent(new Event('map-interaction')));
+
+  map.on('load', async () => {
+    if (!map.getSource('planned-route')) {
+      map.addSource('planned-route', {
+        type: 'geojson',
+        data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } },
+      });
+      map.addLayer({
+        id: 'planned-route-layer',
+        type: 'line',
+        source: 'planned-route',
+        paint: { 'line-color': '#94a3b8', 'line-width': 4, 'line-opacity': 0.5, 'line-dasharray': [2, 2] },
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'visibility': isScheduled ? 'visible' : 'none'
+        },
+      });
+    }
+
+    try {
+      if (isScheduled) {
+        const geo = await getRouteGeometry();
+        if (geo?.coordinates?.length && map.getSource('planned-route')) {
+          map.getSource('planned-route').setData({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: geo.coordinates },
+          });
+        }
+      }
+    } catch (_) { }
+
+    if (!map.getSource('live-trail')) {
+      map.addSource('live-trail', {
+        type: 'geojson',
+        data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } },
+      });
+      map.addLayer({
+        id: 'live-trail-layer',
+        type: 'line',
+        source: 'live-trail',
+        paint: { 'line-color': '#2563eb', 'line-width': 5, 'line-opacity': 0.9 },
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'visibility': isScheduled ? 'visible' : 'none'
+        },
+      });
+    }
+    if (tripId) {
+      try {
+        const trace = await getTripTrace(tripId);
+        if (trace?.coordinates?.length > 0) {
+          trailCoordsRef.current = trace.coordinates;
+          if (map.getSource('live-trail')) {
+            map.getSource('live-trail').setData({
+              type: 'Feature',
+              geometry: { type: 'LineString', coordinates: trailCoordsRef.current }
+            });
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load historical trace', e);
+      }
+    }
   });
 }
 
-// ── Dashboard component ───────────────────────────────────────────────────────
 export default function Dashboard() {
   const showToast = useToast();
 
@@ -107,36 +210,191 @@ export default function Dashboard() {
   const [stops, setStops] = useState([]);
   const [loading, setLoading] = useState(true);
   const [wsStatus, setWsStatus] = useState('Connecting...');
+  const [autoCenter, setAutoCenter] = useState(true);
 
-  const markerRef = useRef(null); // MapLibre marker
-  const mapRef = useRef(null); // MapLibre map instance
-  const wsRef = useRef(null); // WebSocket
+  const markerRef = useRef(null);
+  const mapRef = useRef(null);
+  const wsRef = useRef(null);
   const mapBuilt = useRef(false);
+  const trailCoordsRef = useRef([]);
+  const lastGpsRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const currentPosRef = useRef(null);
+  const isAutoCenterRef = useRef(true);
+  const lastPingTimeRef = useRef(performance.now());
+  const pingGapRef = useRef(2000); // Start assuming a 2-second ping gap
 
-  // ── Initial data fetch ──────────────────────────────────────────────────────
-  // This runs immediately when the Dashboard opens. It reaches out to the 
-  // Postgres database to grab the current state of the system before the WebSocket connects.
+  useEffect(() => {
+    isAutoCenterRef.current = autoCenter;
+  }, [autoCenter]);
+
+  useEffect(() => {
+    const handleInteraction = () => {
+      if (isAutoCenterRef.current) setAutoCenter(false);
+    };
+    const handleRecenter = () => {
+      setAutoCenter(true);
+      if (mapRef.current && currentPosRef.current) {
+        mapRef.current.panTo(currentPosRef.current, { duration: 500 });
+      }
+    };
+    window.addEventListener('map-interaction', handleInteraction);
+    window.addEventListener('recenter-bus', handleRecenter);
+    return () => {
+      window.removeEventListener('map-interaction', handleInteraction);
+      window.removeEventListener('recenter-bus', handleRecenter);
+    };
+  }, []);
+
+  useEffect(() => {
+    const btn = document.getElementById('recenter-bus-btn');
+    if (btn) {
+      btn.style.color = autoCenter ? '#2563eb' : '#475569';
+    }
+  }, [autoCenter]);
+
+  const animateBusTo = useCallback(async (targetLat, targetLon) => {
+    if (!markerRef.current) return;
+
+    const startPos = currentPosRef.current || [targetLon, targetLat];
+    const [startLon, startLat] = startPos;
+
+    // Ensure startPos is permanently in the trail so we don't get gaps/straight lines when bridging interrupted segments
+    const lastTrailPt = trailCoordsRef.current[trailCoordsRef.current.length - 1];
+    if (!lastTrailPt || lastTrailPt[0] !== startPos[0] || lastTrailPt[1] !== startPos[1]) {
+      trailCoordsRef.current.push(startPos);
+    }
+
+    const distKm = haversineDistKm(startLon, startLat, targetLon, targetLat);
+
+    if (!currentPosRef.current || distKm > 2.0) {
+      markerRef.current.setLngLat([targetLon, targetLat]);
+      currentPosRef.current = [targetLon, targetLat];
+      if (distKm > 2.0) {
+        trailCoordsRef.current = [];
+        if (mapRef.current && mapRef.current.getSource('live-trail')) {
+          mapRef.current.getSource('live-trail').setData({
+            type: 'Feature', geometry: { type: 'LineString', coordinates: [] }
+          });
+        }
+      }
+      if (mapRef.current && isAutoCenterRef.current) {
+        mapRef.current.panTo([targetLon, targetLat], { duration: 300 });
+      }
+      return;
+    }
+
+    if (distKm < 0.0005) {
+      markerRef.current.setLngLat([targetLon, targetLat]);
+      currentPosRef.current = [targetLon, targetLat];
+      return;
+    }
+
+    let polyline = [[startLon, startLat], [targetLon, targetLat]];
+    try {
+      const seg = await getRouteSegment(startLat, startLon, targetLat, targetLon);
+      if (seg?.coordinates?.length >= 2) {
+        polyline = seg.coordinates;
+      }
+    } catch (_) { }
+
+    const cumDists = [0];
+    for (let i = 1; i < polyline.length; i++) {
+      cumDists.push(cumDists[i - 1] + haversineDistKm(polyline[i - 1][0], polyline[i - 1][1], polyline[i][0], polyline[i][1]));
+    }
+    const totalDist = cumDists[cumDists.length - 1];
+
+    if (totalDist <= 0.00001) {
+      markerRef.current.setLngLat([targetLon, targetLat]);
+      currentPosRef.current = [targetLon, targetLat];
+      return;
+    }
+
+    // Dynamically set animation duration to perfectly match the gap between pings so it NEVER stops moving
+    const duration = pingGapRef.current;
+    const startTime = performance.now();
+    let appendedIdx = 0;
+
+    const step = (now) => {
+      let progress = (now - startTime) / duration;
+      if (progress > 1.0) progress = 1.0;
+
+      const currentDist = progress * totalDist;
+      let segIdx = 0;
+      while (segIdx < cumDists.length - 2 && cumDists[segIdx + 1] < currentDist) {
+        segIdx++;
+      }
+
+      // Save passed OSRM road nodes permanently so they aren't lost if the animation is interrupted!
+      while (appendedIdx < segIdx) {
+        appendedIdx++;
+        trailCoordsRef.current.push(polyline[appendedIdx]);
+      }
+
+      const p1 = polyline[segIdx];
+      const p2 = polyline[segIdx + 1];
+      const segSpan = (cumDists[segIdx + 1] - cumDists[segIdx]) || 0.00001;
+      const segFrac = Math.max(0, Math.min(1, (currentDist - cumDists[segIdx]) / segSpan));
+
+      const curLon = p1[0] + (p2[0] - p1[0]) * segFrac;
+      const curLat = p1[1] + (p2[1] - p1[1]) * segFrac;
+
+      currentPosRef.current = [curLon, curLat];
+      markerRef.current.setLngLat([curLon, curLat]);
+
+      if (mapRef.current && mapRef.current.getSource('live-trail')) {
+        const liveCoords = [...trailCoordsRef.current, [curLon, curLat]];
+        mapRef.current.getSource('live-trail').setData({
+          type: 'Feature', geometry: { type: 'LineString', coordinates: liveCoords }
+        });
+      }
+
+      if (mapRef.current && isAutoCenterRef.current) {
+        mapRef.current.panTo([curLon, curLat], { duration: 200 });
+      }
+
+      if (progress < 1.0) {
+        animFrameRef.current = requestAnimationFrame(step);
+      } else {
+        while (appendedIdx < polyline.length - 1) {
+          appendedIdx++;
+          trailCoordsRef.current.push(polyline[appendedIdx]);
+        }
+        const finalPoint = polyline[polyline.length - 1];
+        currentPosRef.current = finalPoint;
+        markerRef.current.setLngLat(finalPoint);
+
+        if (mapRef.current && mapRef.current.getSource('live-trail')) {
+          mapRef.current.getSource('live-trail').setData({
+            type: 'Feature', geometry: { type: 'LineString', coordinates: trailCoordsRef.current }
+          });
+        }
+      }
+    };
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    animFrameRef.current = requestAnimationFrame(step);
+  }, []);
+
   async function fetchAll() {
     try {
-      // Promise.all fires all three database queries at the exact same time for speed
       const [gpsData, tripData, stopsData] = await Promise.all([
-        // getLatestGps() asks the DB: "Where is the absolute last place the bus was seen?"
-        // If the DB is 100% empty (or throws an error), .catch() safely returns null
         getLatestGps().catch(() => null),
-
-        // Checks if the trip is 'waiting', 'active', 'completed', etc.
         getTripState().catch(() => null),
-
-        // Loads the 21 bus stops to draw them on the map
         getStops().catch(() => []),
       ]);
 
-      // Save the database responses into React state so the UI can render them
       setGps(gpsData);
       setTripState(tripData);
       setStops(stopsData);
 
-      // Keep marker color in sync during 10s polling
+      if (gpsData?.lat && gpsData?.lon) {
+        lastGpsRef.current = [gpsData.lat, gpsData.lon];
+        currentPosRef.current = [gpsData.lon, gpsData.lat];
+        if (trailCoordsRef.current.length === 0) {
+          trailCoordsRef.current = [[gpsData.lon, gpsData.lat]];
+        }
+      }
+
       const busDot = document.getElementById('bus-dot');
       if (busDot) {
         busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', gpsData?.is_live ? '#16a34a' : '#6b7280'));
@@ -148,7 +406,20 @@ export default function Dashboard() {
     }
   }
 
-  // ── Mount: fetch once, then connect WebSocket ────────────────────────────
+  // Reset trail when trip completes or goes offline
+  useEffect(() => {
+    if (tripState?.status === 'completed' || tripState?.status === 'offline' || tripState?.status === 'waiting') {
+      trailCoordsRef.current = [];
+      lastGpsRef.current = null;
+      if (mapRef.current && mapRef.current.getSource('live-trail')) {
+        mapRef.current.getSource('live-trail').setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: [] },
+        });
+      }
+    }
+  }, [tripState?.status]);
+
   useEffect(() => {
     fetchAll();
 
@@ -160,53 +431,73 @@ export default function Dashboard() {
     ws.onopen = () => setWsStatus('Live');
     ws.onclose = () => setWsStatus('Offline');
 
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'gps' && data.lat && data.lon) {
+          const now = performance.now();
+          const gap = now - lastPingTimeRef.current;
+          if (gap > 500 && gap < 60000) {
+            // Smooth moving average to calculate exact ping rate
+            pingGapRef.current = (pingGapRef.current * 0.3) + (gap * 0.7);
+          }
+          lastPingTimeRef.current = now;
+
           setGps(prev => ({ ...prev, lat: data.lat, lon: data.lon, speed_kmh: data.speed_kmh, server_time: data.server_time, is_live: true }));
 
-          // Move existing marker if map is already built
-          if (markerRef.current) {
-            markerRef.current.setLngLat([data.lon, data.lat]);
+          animateBusTo(data.lat, data.lon);
 
-            // Turn marker green as soon as live data arrives (was grey if offline on load)
-            const body = document.getElementById('bus-body');
-            if (body) {
-              body.setAttribute('fill', '#16a34a');
-            }
-
-            // Pan map if bus drifts out of view
-            if (mapRef.current) {
-              const bounds = mapRef.current.getBounds();
-              if (!bounds.contains([data.lon, data.lat])) {
-                mapRef.current.panTo([data.lon, data.lat]);
-              }
-            }
+          const busDot = document.getElementById('bus-dot');
+          if (busDot) {
+            busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', '#16a34a'));
           }
         }
       } catch (_) { }
     };
 
-    return () => ws.close();
-  }, []);
+    return () => {
+      ws.close();
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [animateBusTo]);
 
-  // ── Build map after initial load (always, with fallback coords) ───────────
-  // Central Poly (8.5350, 76.9908) is used when GPS is offline.
   useEffect(() => {
     if (loading || mapBuilt.current) return;
     mapBuilt.current = true;
     const lat = gps?.lat ?? 8.5350;
     const lon = gps?.lon ?? 76.9908;
-    const isLive = gps?.is_live === true; // true = ping in last 60s; false = offline/no data
-    loadMapLibre(() =>
-      setTimeout(() => buildMapLive('admin-map', lat, lon, isLive, stops, mapRef, markerRef), 150)
-    );
-  }, [loading]); // triggers once when loading flips false
+    const isLive = gps?.is_live === true;
+    loadMapLibre(() => {
+      setTimeout(() => {
+        const isScheduled = isScheduledTrip(tripState?.trip);
+        buildMapLive('admin-map', lat, lon, isLive, stops, mapRef, markerRef, isScheduled, tripState?.trip_id, trailCoordsRef);
+      }, 150);
+    });
+  }, [loading]);
 
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+    const isScheduled = isScheduledTrip(tripState?.trip) && tripState?.status !== 'completed';
 
+    if (map.getLayer('live-trail-layer')) {
+      map.setLayoutProperty('live-trail-layer', 'visibility', isScheduled ? 'visible' : 'none');
+    }
+    if (map.getLayer('planned-route-layer')) {
+      map.setLayoutProperty('planned-route-layer', 'visibility', isScheduled ? 'visible' : 'none');
+    }
 
-  // ── Loading skeleton ───────────────────────────────────────────────────────
+    // When trip completes or becomes unscheduled, instantly clear the blue trail
+    if (!isScheduled && trailCoordsRef.current.length > 0) {
+      trailCoordsRef.current = [];
+      if (map.getSource('live-trail')) {
+        map.getSource('live-trail').setData({
+          type: 'Feature', geometry: { type: 'LineString', coordinates: [] }
+        });
+      }
+    }
+  }, [tripState]);
+
   if (loading) {
     return (
       <div className="loading-center">
@@ -216,52 +507,62 @@ export default function Dashboard() {
     );
   }
 
-  // ── Page render ────────────────────────────────────────────────────────────
   return (
     <div>
-
-      {/* ── Page header ─────────────────────────────────────────── */}
       <div className="page-header">
         <div>
           <div className="page-title">Dashboard</div>
-
         </div>
       </div>
 
-      {/* ── 4 stat cards ─────────────────────────────────────────── */}
       <div className="stats-row">
-
-        {/* Trip direction */}
         <div className="stat-card">
           <div className="stat-label" style={{ marginBottom: '8px', marginTop: 0 }}>Current Trip</div>
           <div className="stat-val" style={{ fontSize: '16px', textTransform: 'capitalize', fontWeight: 700 }}>
-            {tripState?.trip || '—'}
+            {formatTripName(tripState?.trip)}
           </div>
         </div>
 
-        {/* GPS signal */}
         <div className="stat-card">
           <div className="stat-label" style={{ marginBottom: '8px', marginTop: 0 }}>GPS Signal</div>
-          <div>
-            <span className={`badge ${gps?.is_live ? 'badge-green' : (gps ? 'badge-gray' : 'badge-red')}`}>
-              {gps?.is_live ? 'Active' : (gps ? 'Offline' : 'No data')}
-            </span>
+          <div
+            className="stat-val"
+            style={{
+              fontSize: '16px',
+              fontWeight: 700,
+              color: gps?.is_live ? '#15803d' : (gps ? '#4b5563' : '#b91c1c'),
+            }}
+          >
+            {gps?.is_live ? 'Active' : (gps ? 'Offline' : 'No data')}
           </div>
         </div>
 
-        {/* Total stops count */}
         <div className="stat-card">
           <div className="stat-label" style={{ marginBottom: '8px', marginTop: 0 }}>Bus Stops</div>
           <div className="stat-val">{stops.length}</div>
         </div>
 
-        {/* Trip status */}
         <div className="stat-card">
           <div className="stat-label" style={{ marginBottom: '8px', marginTop: 0 }}>Status</div>
-          <div>
-            {statusBadge(tripState?.status)}
-          </div>
-          {/* Late minutes — shown only if bus is running late */}
+          {(() => {
+            const map = {
+              active: { label: 'Active', color: '#15803d' },
+              on_trip: { label: 'Active', color: '#15803d' },
+              connecting: { label: 'Connecting...', color: '#b45309' },
+              waiting: { label: 'Waiting', color: '#2563eb' },
+              completed: { label: 'Completed', color: '#4b5563' },
+              offline: { label: 'Offline', color: '#4b5563' },
+              cancelled: { label: 'Cancelled', color: '#b91c1c' },
+              late: { label: 'Late', color: '#b45309' },
+            };
+            const s = tripState?.status;
+            const res = map[s] || { label: s ? s.charAt(0).toUpperCase() + s.slice(1) : '—', color: '#4b5563' };
+            return (
+              <div className="stat-val" style={{ fontSize: '16px', fontWeight: 700, color: res.color }}>
+                {res.label}
+              </div>
+            );
+          })()}
           {tripState?.late_by_minutes && (
             <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '6px' }}>
               {tripState.late_by_minutes} min delay
@@ -270,331 +571,62 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── Live Map section (full width) ────────────────────────── */}
-      <div className="card">
-        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Live Position</span>
-          {gps?.server_time && (
-            <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 'normal' }}>
-              Last updated: {new Date(gps.server_time).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
-            </span>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px', marginTop: '20px' }}>
+        <div className="card">
+          <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Live Position</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {gps?.server_time && (
+                <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 'normal' }}>
+                  Last updated: {new Date(gps.server_time).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div style={{ position: 'relative' }}>
+            <div id="admin-map" style={{ width: '100%', height: '65vh', minHeight: '350px', borderRadius: '8px', border: '1px solid #e2e8f0' }}></div>
+          </div>
+
+          {gps ? (
+            <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.6' }}>
+              <span>{gps.lat?.toFixed(5)}, {gps.lon?.toFixed(5)}</span>
+              {gps.speed_kmh != null && (
+                <span style={{ marginLeft: '10px' }}>{gps.speed_kmh} km/h</span>
+              )}
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', marginTop: '12px', fontSize: '13px' }}>
+              No GPS data available. The tracker may be offline.
+            </p>
           )}
         </div>
-        <div id="admin-map" style={{ minHeight: '400px' }}></div>
 
-        {/* GPS coordinates below the map */}
-        {gps ? (
-          <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.6' }}>
-            <span>{gps.lat?.toFixed(5)}, {gps.lon?.toFixed(5)}</span>
-            {gps.speed_kmh != null && (
-              <span style={{ marginLeft: '10px' }}>{gps.speed_kmh} km/h</span>
-            )}
-          </div>
-        ) : (
-          <p style={{ color: 'var(--text-muted)', marginTop: '12px', fontSize: '13px' }}>
-            No GPS data available. The tracker may be offline.
-          </p>
-        )}
-      </div>
-
-      {/* ── Stops list ────────────────────────────────────────────── */}
-      <div className="card">
-        <div className="card-title">Route Stops ({stops.length})</div>
-        {stops.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No stops configured.</p>
-        ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            {/* Each stop shown as a small pill chip */}
-            {stops.map((s, i) => (
-              <span
-                key={s.id}
-                style={{
-                  background: 'var(--surface2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '6px',
-                  padding: '4px 11px',
-                  fontSize: '12px',
-                  color: 'var(--text-muted)',
-                }}
-              >
-                {i + 1}. {s.name}
-              </span>
-            ))}
-          </div>
-        )}
+        <div className="card">
+          <div className="card-title">Route Stops ({stops.length})</div>
+          {stops.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No stops configured.</p>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {stops.map((s, i) => (
+                <span
+                  key={s.id}
+                  style={{
+                    background: 'var(--surface2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '6px',
+                    padding: '4px 11px',
+                    fontSize: '12px',
+                    color: 'var(--text-muted)',
+                  }}
+                >
+                  {i + 1}. {s.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-
-/* =============================================================================
-                         DASHBOARD.JSX - LINE BY LINE EXPLANATION
-===============================================================================
-
-Lines 1 - 17
-------------------------------------------------------------------------------
-File information and imports.
-
-• Imports React.
-• Imports React Router.
-• Imports API functions.
-• Imports Toast notification hook.
-
-===============================================================================
-statusBadge(status)
-===============================================================================
-
-Lines 18 - 32
-------------------------------------------------------------------------------
-Converts the trip status into a colored badge.
-
-Supported Status:
-
-• Active
-• On Trip
-• Connecting
-• Waiting
-• Completed
-• Cancelled
-• Late
-
-If the status is not found,
-it returns an "Unknown" badge.
-
-Returns a JSX <span> with the proper CSS class.
-
-===============================================================================
-loadMapLibre(callback)
-===============================================================================
-
-Lines 33 - 46
-------------------------------------------------------------------------------
-Loads the MapLibre library dynamically.
-
-Steps:
-
-1. Checks whether MapLibre is already loaded.
-2. If loaded → run callback().
-3. Create CSS <link>.
-4. Load MapLibre stylesheet.
-5. Create JavaScript <script>.
-6. Load MapLibre JS.
-7. After loading finishes,
-   execute callback().
-
-===============================================================================
-buildMapLive(...)
-===============================================================================
-
-Lines 47 - 95
-------------------------------------------------------------------------------
-Creates the live map.
-
-Main operations:
-
-• Checks whether map container exists.
-• Creates MapLibre map.
-• Sets initial center.
-• Sets zoom level.
-• Saves map reference.
-• Adds navigation controls.
-• Creates custom bus marker.
-• Changes marker color based on GPS status.
-• Creates popup.
-• Places marker on map.
-• Stores marker reference.
-• Loops through every bus stop.
-• Creates blue stop markers.
-• Adds popup for each stop.
-
-===============================================================================
-Dashboard Component
-===============================================================================
-
-Lines 96 - 110
-------------------------------------------------------------------------------
-Starts the Dashboard component.
-
-Creates:
-
-• Toast hook
-• GPS state
-• Trip state
-• Stops state
-• Loading state
-• WebSocket status
-
-Creates references for:
-
-• Marker
-• Map
-• WebSocket
-• Map initialization flag
-
-===============================================================================
-fetchAll()
-===============================================================================
-
-Lines 111 - 136
-------------------------------------------------------------------------------
-Fetches all dashboard data.
-
-Downloads:
-
-• Latest GPS
-• Trip state
-• Stops list
-
-Updates React state.
-
-Updates marker color depending on
-whether GPS is live or offline.
-
-Handles API errors.
-
-Stops loading animation.
-
-===============================================================================
-First useEffect()
-===============================================================================
-
-Lines 137 - 181
-------------------------------------------------------------------------------
-Runs once after the page loads.
-
-Performs:
-
-• Calls fetchAll().
-• Creates WebSocket connection.
-• Stores socket reference.
-• Detects connection status.
-• Receives live GPS.
-• Updates GPS state.
-• Moves existing marker.
-• Turns marker green.
-• Automatically pans map if bus leaves screen.
-• Closes WebSocket when component unmounts.
-
-===============================================================================
-Second useEffect()
-===============================================================================
-
-Lines 182 - 194
-------------------------------------------------------------------------------
-Builds the map only once.
-
-Steps:
-
-• Wait until loading finishes.
-• Prevent multiple map creation.
-• Use GPS coordinates.
-• Use fallback coordinates if GPS is unavailable.
-• Load MapLibre.
-• Create live map.
-
-===============================================================================
-Loading Screen
-===============================================================================
-
-Lines 195 - 204
-------------------------------------------------------------------------------
-Shows loading spinner while data is loading.
-
-Displays:
-
-• Spinner
-• Loading message
-
-===============================================================================
-Dashboard UI
-===============================================================================
-
-Lines 205 - 267
-------------------------------------------------------------------------------
-Builds the main Dashboard interface.
-
-Displays:
-
-• Dashboard title
-• Current Trip card
-• GPS Signal card
-• Total Stops card
-• Trip Status card
-
-Shows:
-
-• GPS activity
-• Last update time
-• Delay information
-
-===============================================================================
-Live Map Section
-===============================================================================
-
-Lines 268 - 290
-------------------------------------------------------------------------------
-Displays the live map.
-
-Shows:
-
-• Map container
-• GPS coordinates
-• Current speed
-• Offline message when GPS is unavailable
-
-===============================================================================
-Stops Section
-===============================================================================
-
-Lines 291 - 319
-------------------------------------------------------------------------------
-Displays all bus stops.
-
-If no stops exist:
-
-• Show "No stops configured."
-
-Otherwise:
-
-• Display every stop as a pill.
-• Show stop number.
-• Show stop name.
-
-===============================================================================
-OVERALL EXECUTION FLOW
-===============================================================================
-
-Dashboard Starts
-       │
-       ▼
-Create React States
-       │
-       ▼
-fetchAll()
-       │
-       ▼
-Download GPS + Trip + Stops
-       │
-       ▼
-Open WebSocket
-       │
-       ▼
-Receive Live GPS
-       │
-       ▼
-Move Marker
-       │
-       ▼
-Build Map
-       │
-       ▼
-Display Dashboard
-       │
-       ▼
-Show Live Map
-       │
-       ▼
-Show Route Stops
-
-===============================================================================
-*/

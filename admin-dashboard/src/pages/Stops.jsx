@@ -18,33 +18,33 @@ const GEOCODER_JS = "https://unpkg.com/@maplibre/maplibre-gl-geocoder@1.5.0/dist
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
 function loadMapLibreWithGeocoder() {
-    return new Promise((resolve) => {
-        if (window.maplibregl && window.MaplibreGeocoder) {
-            resolve({ maplibregl: window.maplibregl, MaplibreGeocoder: window.MaplibreGeocoder });
-            return;
-        }
+  return new Promise((resolve) => {
+    if (window.maplibregl && window.MaplibreGeocoder) {
+      resolve({ maplibregl: window.maplibregl, MaplibreGeocoder: window.MaplibreGeocoder });
+      return;
+    }
 
-        // Load CSS
-        if (!document.querySelector(`link[href="${MAPLIBRE_CSS}"]`)) {
-            const link = document.createElement("link"); link.rel = "stylesheet"; link.href = MAPLIBRE_CSS;
-            document.head.appendChild(link);
-        }
-        if (!document.querySelector(`link[href="${GEOCODER_CSS}"]`)) {
-            const link = document.createElement("link"); link.rel = "stylesheet"; link.href = GEOCODER_CSS;
-            document.head.appendChild(link);
-        }
+    // Load CSS
+    if (!document.querySelector(`link[href="${MAPLIBRE_CSS}"]`)) {
+      const link = document.createElement("link"); link.rel = "stylesheet"; link.href = MAPLIBRE_CSS;
+      document.head.appendChild(link);
+    }
+    if (!document.querySelector(`link[href="${GEOCODER_CSS}"]`)) {
+      const link = document.createElement("link"); link.rel = "stylesheet"; link.href = GEOCODER_CSS;
+      document.head.appendChild(link);
+    }
 
-        // Load JS sequentially (Geocoder depends on MapLibre)
-        const mlScript = document.createElement("script");
-        mlScript.src = MAPLIBRE_JS;
-        mlScript.onload = () => {
-            const gcScript = document.createElement("script");
-            gcScript.src = GEOCODER_JS;
-            gcScript.onload = () => resolve({ maplibregl: window.maplibregl, MaplibreGeocoder: window.MaplibreGeocoder });
-            document.head.appendChild(gcScript);
-        };
-        document.head.appendChild(mlScript);
-    });
+    // Load JS sequentially (Geocoder depends on MapLibre)
+    const mlScript = document.createElement("script");
+    mlScript.src = MAPLIBRE_JS;
+    mlScript.onload = () => {
+      const gcScript = document.createElement("script");
+      gcScript.src = GEOCODER_JS;
+      gcScript.onload = () => resolve({ maplibregl: window.maplibregl, MaplibreGeocoder: window.MaplibreGeocoder });
+      document.head.appendChild(gcScript);
+    };
+    document.head.appendChild(mlScript);
+  });
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ function Modal({ open, onClose, title, children, footer }) {
 export default function Stops() {
   const showToast = useToast();
 
-  const [stops,   setStops]   = useState([]); // all bus stops from the API
+  const [stops, setStops] = useState([]); // all bus stops from the API
   const [loading, setLoading] = useState(true);
 
   // editingId: null → "Add new stop" mode; non-null → "Edit stop #id" mode
@@ -76,13 +76,13 @@ export default function Stops() {
   const [editingId, setEditingId] = useState(null);
 
   // Form field values — split into separate useState for simplicity
-  const [fName,  setFName]  = useState(''); // stop name
-  const [fLat,   setFLat]   = useState(''); // latitude
-  const [fLon,   setFLon]   = useState(''); // longitude
+  const [fName, setFName] = useState(''); // stop name
+  const [fLat, setFLat] = useState(''); // latitude
+  const [fLon, setFLon] = useState(''); // longitude
   const [fOrder, setFOrder] = useState(''); // order_index (position on the route)
 
   // Delete confirmation
-  const [deleteModal,  setDeleteModal]  = useState(false);
+  const [deleteModal, setDeleteModal] = useState(false);
   const [deletingStop, setDeletingStop] = useState(null); // full stop object
 
   const [submitting, setSubmitting] = useState(false); // prevents double-submit
@@ -101,7 +101,7 @@ export default function Stops() {
 
   // Fetch on mount
   useEffect(() => { fetchStops(); }, []);
-  
+
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -116,73 +116,73 @@ export default function Stops() {
       }
       return;
     }
-    
+
     setTimeout(() => {
       if (!mapContainerRef.current) return;
-      
+
       loadMapLibreWithGeocoder().then(({ maplibregl, MaplibreGeocoder }) => {
         const initLat = parseFloat(fLat) || 8.5241;
         const initLon = parseFloat(fLon) || 76.9366;
-        
+
         mapRef.current = new maplibregl.Map({
-            container: mapContainerRef.current,
-            style: MAP_STYLE,
-            center: [initLon, initLat],
-            zoom: 14
+          container: mapContainerRef.current,
+          style: MAP_STYLE,
+          center: [initLon, initLat],
+          zoom: 14
         });
-        
+
         const geocoderApi = {
-            forwardGeocode: async (config) => {
-                const features = [];
-                try {
-                    let request = `https://nominatim.openstreetmap.org/search?q=${config.query}&format=geojson&polygon_geojson=1&addressdetails=1`;
-                    const response = await fetch(request);
-                    const geojson = await response.json();
-                    for (let feature of geojson.features) {
-                        let center = [feature.bbox[0] + (feature.bbox[2] - feature.bbox[0]) / 2, feature.bbox[1] + (feature.bbox[3] - feature.bbox[1]) / 2];
-                        let point = {
-                            type: 'Feature',
-                            geometry: { type: 'Point', coordinates: center },
-                            place_name: feature.properties.display_name,
-                            properties: feature.properties,
-                            text: feature.properties.display_name,
-                            place_type: ['place'],
-                            center: center
-                        };
-                        features.push(point);
-                    }
-                } catch (e) { console.error("Geocoding error", e); }
-                return { features };
-            }
+          forwardGeocode: async (config) => {
+            const features = [];
+            try {
+              let request = `https://nominatim.openstreetmap.org/search?q=${config.query}&format=geojson&polygon_geojson=1&addressdetails=1`;
+              const response = await fetch(request);
+              const geojson = await response.json();
+              for (let feature of geojson.features) {
+                let center = [feature.bbox[0] + (feature.bbox[2] - feature.bbox[0]) / 2, feature.bbox[1] + (feature.bbox[3] - feature.bbox[1]) / 2];
+                let point = {
+                  type: 'Feature',
+                  geometry: { type: 'Point', coordinates: center },
+                  place_name: feature.properties.display_name,
+                  properties: feature.properties,
+                  text: feature.properties.display_name,
+                  place_type: ['place'],
+                  center: center
+                };
+                features.push(point);
+              }
+            } catch (e) { console.error("Geocoding error", e); }
+            return { features };
+          }
         };
 
-        const geocoder = new MaplibreGeocoder(geocoderApi, { 
-            maplibregl: maplibregl, 
-            placeholder: "Search for a location",
-            showResultsWhileTyping: true,
-            minLength: 3,
-            debounceSearch: 1000 // IMPORTANT: 1 second delay to avoid Nominatim banning the IP
+        const geocoder = new MaplibreGeocoder(geocoderApi, {
+          maplibregl: maplibregl,
+          placeholder: "Search for a location",
+          showResultsWhileTyping: true,
+          minLength: 3,
+          debounceSearch: 1000 // IMPORTANT: 1 second delay to avoid Nominatim banning the IP
         });
         mapRef.current.addControl(geocoder, 'top-left');
-        
+
         markerRef.current = new maplibregl.Marker({ color: "#ef4444" })
-            .setLngLat([initLon, initLat])
-            .addTo(mapRef.current);
-            
+          .setLngLat([initLon, initLat])
+          .addTo(mapRef.current);
+
         mapRef.current.on('click', (e) => {
-            const lng = e.lngLat.lng.toFixed(5);
-            const lat = e.lngLat.lat.toFixed(5);
-            markerRef.current.setLngLat([lng, lat]);
-            setFLat(lat);
-            setFLon(lng);
+          const lng = e.lngLat.lng.toFixed(5);
+          const lat = e.lngLat.lat.toFixed(5);
+          markerRef.current.setLngLat([lng, lat]);
+          setFLat(lat);
+          setFLon(lng);
         });
-        
+
         geocoder.on('result', (e) => {
-            const lng = e.result.center[0].toFixed(5);
-            const lat = e.result.center[1].toFixed(5);
-            markerRef.current.setLngLat([lng, lat]);
-            setFLat(lat);
-            setFLon(lng);
+          const lng = e.result.center[0].toFixed(5);
+          const lat = e.result.center[1].toFixed(5);
+          markerRef.current.setLngLat([lng, lat]);
+          setFLat(lat);
+          setFLon(lng);
         });
       });
     }, 150);
@@ -205,20 +205,20 @@ export default function Stops() {
     setStopModal(true);
   }
 
-// Save Stop
-// Validates the form fields before creating a new stop or updating an existing stop.
-async function saveStop() {
+  // Save Stop
+  // Validates the form fields before creating a new stop or updating an existing stop.
+  async function saveStop() {
     // Ensure all required fields are filled
     if (!fName.trim() || !fLat || !fLon || fOrder === '') {
-        showToast('All fields are required', 'error');
-        return;
+      showToast('All fields are required', 'error');
+      return;
     }
 
     // Build the body — parseFloat/parseInt convert string inputs to numbers
     const body = {
-      name:        fName.trim(),
-      lat:         parseFloat(fLat),
-      lon:         parseFloat(fLon),
+      name: fName.trim(),
+      lat: parseFloat(fLat),
+      lon: parseFloat(fLon),
       order_index: parseInt(fOrder, 10) - 1, // Convert back to 0-based for DB
     };
 
@@ -297,7 +297,7 @@ async function saveStop() {
                 <th>Latitude</th>
                 <th>Longitude</th>
                 <th>Order</th>
-                <th>Route</th>
+                <th style={{ paddingLeft: '32px' }}>Route</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -385,8 +385,8 @@ async function saveStop() {
           <label className="form-label">
             Location <span style={{ fontWeight: 'normal', color: 'var(--text-muted)' }}>(Search or click to pin)</span>
           </label>
-          <div 
-            ref={mapContainerRef} 
+          <div
+            ref={mapContainerRef}
             style={{ width: '100%', height: '240px', borderRadius: 'var(--radius)', background: 'var(--surface2)', overflow: 'hidden', border: '1px solid var(--border)' }}
           />
           {(fLat && fLon) ? (

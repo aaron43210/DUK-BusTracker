@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 DESTINATION_RADIUS_M  = 300   # metres — bus "arrived" when within this of destination
-GRACE_PERIOD_S        = 300   # seconds — wait after POWER_OFF before marking completed (5 min)
+GRACE_PERIOD_S        = 1200  # seconds — wait after POWER_OFF before marking completed (20 min)
 MOVEMENT_THRESHOLD_M  = 50    # metres — movement from start point to trigger on_trip
 
 
@@ -227,11 +227,12 @@ async def handle_gps_update(
         dist_to_dest = await get_osrm_distance_m(lat, lon, dest_lat, dest_lon)
         logger.debug("[LIFECYCLE] Trip #%d — %.0fm from destination", trip.id, dist_to_dest)
 
-        # ── Check for early trip completion (within 100m) ──────────────────
-        if dist_to_dest <= 100:
+        # ── Check for early trip completion ──────────────────
+        completion_radius = 100 if trip.direction == 'forward' else 50
+        if dist_to_dest <= completion_radius:
             trip.status = 'completed'
             await db.commit()
-            logger.info("[LIFECYCLE] Trip #%d arrived within 100m of destination! Auto-completing.", trip.id)
+            logger.info("[LIFECYCLE] Trip #%d arrived within %dm of destination! Auto-completing.", trip.id, completion_radius)
             return
 
         # ── Smart Progression (Visited Stops Detection) ───────────────────

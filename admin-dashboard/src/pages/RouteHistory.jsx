@@ -1,6 +1,6 @@
 // src/pages/RouteHistory.jsx
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { getRouteHistory } from "../api.js";
+import { getRouteHistory, snapRoute } from "../api.js";
 import { useToast } from "../App.jsx";
 import { Search, Bus, MapPin, Play, Pause, RotateCcw, Clock } from "lucide-react";
 
@@ -9,7 +9,7 @@ function PremiumTimePicker({ value, onChange }) {
     const [h24, m] = value ? value.split(':') : ['', ''];
     let h12 = '';
     let ampm = 'AM';
-    
+
     if (h24) {
         let h = parseInt(h24, 10);
         ampm = h >= 12 ? 'PM' : 'AM';
@@ -18,8 +18,8 @@ function PremiumTimePicker({ value, onChange }) {
     }
 
     const selectStyle = {
-        appearance: 'none', border: 'none', background: 'transparent', 
-        outline: 'none', fontSize: '15px', fontWeight: '500', 
+        appearance: 'none', border: 'none', background: 'transparent',
+        outline: 'none', fontSize: '15px', fontWeight: '500',
         color: 'var(--text)', cursor: 'pointer', textAlign: 'center',
         padding: '0 4px'
     };
@@ -45,10 +45,10 @@ function PremiumTimePicker({ value, onChange }) {
     };
 
     return (
-        <div style={{ 
-            display: 'flex', gap: '2px', alignItems: 'center', 
-            background: 'var(--surface)', border: '1px solid var(--border)', 
-            borderRadius: 'var(--radius)', padding: '8px 12px', 
+        <div style={{
+            display: 'flex', gap: '2px', alignItems: 'center',
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: '0', padding: '8px 12px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.03)', width: 'max-content'
         }}>
             <select value={h12} onChange={handleHour} style={selectStyle}>
@@ -139,9 +139,12 @@ export default function RouteHistory() {
     // --- Selection + playback state ---
     const [playing, setPlaying] = useState(false);
     const [playIdx, setPlayIdx] = useState(0);
+    const [speed, setSpeed] = useState(1); // 1x, 2x, 5x, 10x
 
     // --- Refs ---
     const playRef = useRef(null);
+    const speedRef = useRef(1);
+    speedRef.current = speed;
     const mapContRef = useRef(null);
     const mapRef = useRef(null);
     const readyRef = useRef(false);
@@ -183,7 +186,7 @@ export default function RouteHistory() {
         try {
             const data = await getRouteHistory(searchDate, searchDate);
             const sessList = data.sessions || [];
-            
+
             if (!sessList.length) {
                 showToast("No trips found on this date.", "error");
                 return;
@@ -191,7 +194,7 @@ export default function RouteHistory() {
 
             // We only have one "full_day" session per date from backend
             let rawSession = sessList[0];
-            
+
             // Filter by time if provided
             let filteredPts = rawSession.route_points;
             let filteredStops = rawSession.stop_crossings;
@@ -261,8 +264,19 @@ export default function RouteHistory() {
             type: "line",
             source: "rh-trail",
             layout: { "line-join": "round", "line-cap": "round" },
-            paint: { "line-color": "#6366f1", "line-width": 5, "line-opacity": 0.85 },
+            paint: { "line-color": "#2563eb", "line-width": 5, "line-opacity": 0.9 },
         });
+
+        // Snap full route points to exact road geometry using OSRM
+        snapRoute(pts).then((res) => {
+            if (res?.coordinates?.length && mapRef.current?.getSource("rh-trail")) {
+                mapRef.current.getSource("rh-trail").setData({
+                    type: "Feature",
+                    geometry: { type: "LineString", coordinates: res.coordinates },
+                });
+            }
+        }).catch(() => { });
+
 
         if (s.stop_crossings.length) {
             const groupedStops = {};
@@ -315,7 +329,7 @@ export default function RouteHistory() {
         }
 
         const el = createBusEl();
-        busRef.current = new window.maplibregl.Marker({ element: el }).setLngLat(coords[0]).addTo(map);
+        busRef.current = new window.maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(coords[0]).addTo(map);
 
         const lngs = coords.map((c) => c[0]);
         const lats = coords.map((c) => c[1]);
@@ -355,11 +369,18 @@ export default function RouteHistory() {
         setPlaying(false);
     }
 
-    function startPb() {
+    function startPb(overrideSpeed) {
         const pts = session?.route_points;
         if (!pts?.length) return;
+        clearInterval(playRef.current);
         setPlaying(true);
         let i = playIdx;
+        if (i >= pts.length - 1) {
+            i = 0;
+            setPlayIdx(0);
+        }
+        const currentSpeed = overrideSpeed ?? speedRef.current;
+        const intervalMs = Math.max(12, Math.round(200 / currentSpeed));
         playRef.current = setInterval(() => {
             i++;
             if (i >= pts.length) {
@@ -369,7 +390,14 @@ export default function RouteHistory() {
             }
             setPlayIdx(i);
             busRef.current?.setLngLat([pts[i].lon, pts[i].lat]);
-        }, 15); // Faster playback (approx 60fps)
+        }, intervalMs);
+    }
+
+    function handleSpeedChange(newSpeed) {
+        setSpeed(newSpeed);
+        if (playing) {
+            startPb(newSpeed);
+        }
     }
 
     function resetPb() {
@@ -383,7 +411,7 @@ export default function RouteHistory() {
 
     const total = session?.route_points?.length ?? 0;
     const pct = total > 1 ? (playIdx / (total - 1)) * 100 : 0;
-    
+
     let curT = session?.route_points?.[playIdx]?.time ?? "--:--";
     if (curT !== "--:--") {
         const [h, m] = curT.split(":");
@@ -395,7 +423,7 @@ export default function RouteHistory() {
 
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "100%" }}>
-            
+
             <div className="page-header">
                 <div>
                     <div className="page-title">Route History</div>
@@ -424,10 +452,10 @@ export default function RouteHistory() {
                         <label className="form-label">End Time</label>
                         <PremiumTimePicker value={endTime} onChange={setEndTime} />
                     </div>
-                    
+
                     <button className="btn btn-primary" onClick={search} disabled={loading} style={{ height: "38px", display: "flex", alignItems: "center" }}>
-                        <Search size={16} />
-                        <span style={{ marginLeft: "6px" }}>{loading ? "Searching..." : "Search"}</span>
+                        <Search size={15} />
+                        <span style={{ marginLeft: "3px", fontSize: "15px" }}>{loading ? "Searching..." : "Search"}</span>
                     </button>
                 </div>
             </div>
@@ -464,10 +492,43 @@ export default function RouteHistory() {
                                     }}
                                 />
                             </div>
-                            <button className="btn btn-ghost btn-sm" onClick={resetPb} style={{ padding: "0 8px" }}>
+                            {/* Speed Selector: 1x, 2x, 5x, 10x */}
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    background: "var(--bg-subtle, #f3f4f6)",
+                                    borderRadius: "3px",
+                                    padding: "2px",
+                                    gap: "2px",
+                                    border: "1px solid var(--border, #e5e7eb)",
+                                }}
+                            >
+                                {[1, 2, 5, 10].map((s) => (
+                                    <button
+                                        key={s}
+                                        onClick={() => handleSpeedChange(s)}
+                                        style={{
+                                            border: "none",
+                                            background: speed === s ? "var(--primary, #6366f1)" : "transparent",
+                                            color: speed === s ? "#fff" : "var(--text-muted, #4b5563)",
+                                            fontWeight: 700,
+                                            fontSize: "12px",
+                                            padding: "3px 8px",
+                                            borderRadius: "2px",
+                                            cursor: "pointer",
+                                            transition: "all 0.15s ease",
+                                        }}
+                                    >
+                                        {s}x
+                                    </button>
+                                ))}
+                            </div>
+
+                            <button className="btn btn-ghost btn-sm" onClick={resetPb} style={{ padding: "0 8px" }} title="Reset to start">
                                 <RotateCcw size={16} />
                             </button>
-                            <button className="btn btn-primary btn-sm" onClick={playing ? stopPb : startPb} style={{ minWidth: "90px", display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
+                            <button className="btn btn-primary btn-sm" onClick={playing ? stopPb : () => startPb()} style={{ minWidth: "90px", display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
                                 {playing ? <><Pause size={16} /> Pause</> : <><Play size={16} /> Play</>}
                             </button>
                         </div>
@@ -544,7 +605,7 @@ export default function RouteHistory() {
                                             <td style={{ padding: "12px 20px", color: "var(--text-muted)", fontWeight: 500 }}>{i + 1}</td>
                                             <td style={{ padding: "12px 20px", fontWeight: 600, color: "var(--text-dark)" }}>{sc.stop_name}</td>
                                             <td style={{ padding: "12px 20px" }}>
-                                                <span style={{ background: "var(--bg-color)", padding: "4px 8px", borderRadius: "6px", fontSize: "13px", fontWeight: 500 }}>
+                                                <span style={{ background: "var(--bg-color)", padding: "4px 8px", borderRadius: "0", fontSize: "13px", fontWeight: 500 }}>
                                                     {sc.crossed_at}
                                                 </span>
                                             </td>
