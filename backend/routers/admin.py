@@ -4,13 +4,13 @@ Protected by X-Admin-Token header.
 """
 import asyncio
 import logging
+import math
 from datetime import date, datetime, timedelta, timezone
-from math import radians, cos, sin, asin, sqrt
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, update
+from sqlalchemy import select, desc, and_, update, func
 from typing import List, Optional, Literal
 
 from database import get_db
@@ -19,7 +19,9 @@ from models.trip import Trip
 from models.gps import GpsLog
 from models.notification import AdminBroadcast, Suggestion, ScheduledNotification
 from services.firebase import broadcast_to_all_users
+from services.geofence import haversine_km
 from services.trip_lifecycle import auto_complete_expired_trips
+from routers.tracking import clear_stops_cache
 from config import get_settings
 from constants import IST_OFFSET, MORNING_END_MINS, EVENING_END_MINS
 
@@ -364,7 +366,7 @@ async def cancel_advance_trip(
             if remind_date >= now_date:
                 send_dt = _reminder_time(remind_date, direction, 0)
                 # Skip if send_at is already in the past today
-                now_ist = datetime.now(timezone.utc).replace(tzinfo=None) + IST
+                now_ist = datetime.now(timezone.utc).replace(tzinfo=None) + IST_OFFSET
                 if send_dt > now_ist:
                     db.add(ScheduledNotification(
                         trip_id=trip_id,
@@ -533,13 +535,6 @@ async def get_route_history(
     all_stops = [{"id": s.id, "name": s.name, "lat": s.lat, "lon": s.lon}
                  for s in stops_res.scalars().all()]
 
-    def haversine_km(lat1, lon1, lat2, lon2):
-        R = 6371
-        dlat = radians(lat2 - lat1)
-        dlon = radians(lon2 - lon1)
-        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-        return R * 2 * asin(sqrt(a))
-
     def find_nearest_stop(lat, lon, threshold_km=0.3):
         best, best_d = None, float("inf")
         for s in all_stops:
@@ -550,7 +545,6 @@ async def get_route_history(
 
     # Fetch completed trips in range
     # Find unique dates that have GPS logs in the range
-    from sqlalchemy import func
     dates_res = await db.execute(
         select(func.date(GpsLog.server_time)).where(
             func.date(GpsLog.server_time).between(d_from, d_to),
@@ -559,8 +553,6 @@ async def get_route_history(
     )
     valid_dates = dates_res.scalars().all()
 
-    from datetime import timezone
-    
     sessions = []
     for d in valid_dates:
         # Force the query bounds to be UTC aware. 
@@ -651,13 +643,6 @@ async def _apply_map_matching(
     # Limit concurrency to prevent socket exhaustion (Too many open files)
     sem = asyncio.Semaphore(100)
     
-    def haversine_km(lat1, lon1, lat2, lon2):
-        R = 6371
-        dlat = math.radians(lat2 - lat1)
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-        return R * 2 * math.asin(math.sqrt(a))
-        
     async with httpx.AsyncClient() as client:
         async def fetch_route(pt1, pt2, idx):
             async with sem:
@@ -699,7 +684,6 @@ async def _apply_map_matching(
         for i in range(len(raw_points) - 1):
             tasks.append(fetch_route(raw_points[i], raw_points[i+1], i))
             
-        import math
         results = await asyncio.gather(*tasks)
 
     # Reconstruct the array in original order
@@ -763,7 +747,6 @@ async def create_stop(
     await db.commit()
     await db.refresh(stop)
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"id": stop.id, "name": stop.name}
@@ -804,7 +787,6 @@ async def update_stop(
         setattr(stop, field, val)
     await db.commit()
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"success": True}
@@ -843,7 +825,6 @@ async def delete_stop(
     
     await db.commit()
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"success": True}
@@ -869,7 +850,6 @@ async def create_route(
     await db.commit()
     await db.refresh(route)
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"id": route.id, "name": route.name}

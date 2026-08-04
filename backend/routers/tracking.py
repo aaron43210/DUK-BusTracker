@@ -24,8 +24,6 @@ from constants import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["tracking"])
 
-_GEOFENCE_RADIUS_KM = 0.4  # 400 m
-
 
 # --- Global Memory Caches ---
 _STOPS_CACHE = None
@@ -134,6 +132,10 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
     )
     trips = result.scalars().all()
 
+    # Compute IST time once — used throughout the function
+    now_ist   = datetime.now(timezone.utc) + IST_OFFSET
+    time_mins = now_ist.hour * 60 + now_ist.minute
+
     if trips:
         active = next((t for t in trips if t.status in ("on_trip", "active", "late")), None)
         if active:
@@ -157,10 +159,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 "next_trip_time":      None,
             }
 
-        # Check if the current window's trip completed early!
-        now_ist = datetime.now(timezone.utc) + IST_OFFSET
-        time_mins = now_ist.hour * 60 + now_ist.minute
-        
         current_window = None
         if MORNING_START_MINS <= time_mins <= MORNING_END_MINS:
             current_window = "morning"
@@ -188,8 +186,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
             scheduled_trips.sort(key=lambda x: 0 if x.direction in ("forward", "morning", "Morning") else 1)
             target_trip = scheduled_trips[0]
             
-            now_ist = datetime.now(timezone.utc) + IST_OFFSET
-            time_mins = now_ist.hour * 60 + now_ist.minute
             is_morning = target_trip.direction in ("forward", "morning", "Morning")
             
             is_active_window = False
@@ -234,8 +230,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 }
 
     # Fallback: time-window logic (used for normal weekdays when no trips are in DB yet)
-    now_ist   = datetime.now(timezone.utc) + IST_OFFSET
-    time_mins = now_ist.hour * 60 + now_ist.minute
 
     # Weekend or Friday after evening commute -> Next trip is Monday morning
     if today.weekday() >= 5 or (today.weekday() == 4 and time_mins > EVENING_END_MINS):

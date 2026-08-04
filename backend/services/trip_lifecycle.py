@@ -24,9 +24,6 @@ from models.trip import Trip
 from models.gps import GpsLog
 from models.route import BusStop
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
-
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────

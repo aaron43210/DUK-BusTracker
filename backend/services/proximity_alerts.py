@@ -23,6 +23,8 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, text
 
+from constants import IST_OFFSET
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -38,10 +40,6 @@ SCHEDULED_ARRIVAL = {
 
 # How many minutes over-scheduled before we fire the "running late" auto-notification
 LATE_THRESHOLD_MIN = 10
-
-# IST offset
-IST = timedelta(hours=5, minutes=30)
-
 
 # ── pgRouting helpers ──────────────────────────────────────────────────────────
 
@@ -163,7 +161,7 @@ async def check_eta_late_notification(
     if eta_min is None:
         return False
 
-    now_ist = datetime.now(timezone.utc) + IST
+    now_ist = datetime.now(timezone.utc) + IST_OFFSET
     predicted_arrival = now_ist + timedelta(minutes=eta_min)
 
     # Compare against scheduled arrival

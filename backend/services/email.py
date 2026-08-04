@@ -3,19 +3,22 @@ services/email.py — SMTP OTP email sender.
 Only sends to @duk.ac.in addresses.
 """
 import smtplib
-import random
+import secrets
 import logging
-from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from config import get_settings
 
-logger = logging.getLogger(__name__)
+logger   = logging.getLogger(__name__)
 settings = get_settings()
+
+# IST offset used for OTP timestamp display
+_IST = timedelta(hours=5, minutes=30)
 
 
 def generate_otp(length: int = 6) -> str:
-    """Generate a zero-padded numeric OTP."""
-    return str(random.randint(0, 10**length - 1)).zfill(length)
+    """Generate a zero-padded numeric OTP using a cryptographically secure source."""
+    return str(secrets.randbelow(10**length)).zfill(length)
 
 
 def send_otp_email(to_email: str, name: str, otp: str) -> bool:
@@ -23,51 +26,66 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
     Send an OTP verification email.
     Returns True on success, False on failure.
     """
-    html_body = f"""
-    <!DOCTYPE html>
-    <html>
-    <body style="font-family: 'Segoe UI', sans-serif; background:#f4f7f6; margin:0; padding:0;">
-      <div style="max-width:480px; margin:40px auto; background:#ffffff; border-radius:16px;
-                  box-shadow:0 4px 24px rgba(0,0,0,0.08); overflow:hidden;">
-        <div style="background:linear-gradient(135deg,#1a7a5e,#2ecc8a); padding:32px 32px 24px;">
-          <h1 style="color:#fff; margin:0; font-size:22px; font-weight:700;">DUK Bus Tracker</h1>
-          <p style="color:rgba(255,255,255,0.8); margin:6px 0 0; font-size:14px;">
-            Digital University Kerala
-          </p>
-        </div>
-        <div style="padding:32px;">
-          <p style="color:#333; font-size:16px; margin:0 0 8px;">Hi <strong>{name}</strong>,</p>
-          <p style="color:#555; font-size:14px; margin:0 0 28px;">
-            Use the code below to verify your DUK email and activate your Bus Tracker account.
-            This code expires in <strong>10 minutes</strong>.
-          </p>
-          <div style="background:#f0faf6; border:2px solid #2ecc8a; border-radius:12px;
-                      padding:20px; text-align:center; margin-bottom:28px;">
-            <span style="font-size:42px; font-weight:800; letter-spacing:12px; color:#1a7a5e;">
-              {otp}
-            </span>
-          </div>
-          <p style="color:#999; font-size:12px; margin:0;">
-            If you didn't request this, please ignore this email. Do not share this code with anyone.
-          </p>
-        </div>
-        <div style="background:#f9f9f9; padding:16px 32px; text-align:center;">
-          <p style="color:#bbb; font-size:11px; margin:0;">
-            DUK Bus Tracker &bull; Digital University Kerala &bull; duk.ac.in
-          </p>
-        </div>
-      </div>
-    </body>
-    </html>
-    """
+    ist_now = (datetime.now(timezone.utc) + _IST).strftime("%Y-%m-%d %H:%M:%S")
 
-    msg = MIMEMultipart("alternative")
+    html_body = f"""<!DOCTYPE html>
+<html>
+<body style="margin:0; padding:0; font-family: Arial, sans-serif; background:#ffffff; color:#222222;">
+  <div style="max-width:560px; margin:32px auto; padding:0 16px;">
+
+    <p style="margin:0 0 16px;">Dear <strong>{name}</strong>,</p>
+
+    <p style="margin:0 0 16px; line-height:1.6;">
+      You are attempting to sign in to your <strong>DUK Bus Tracker</strong> account
+      using the registered email address <strong>{to_email}</strong>.
+    </p>
+
+    <p style="margin:0 0 16px; line-height:1.6;">
+      Your <span style="background:#fff3cd; padding:1px 4px; border-radius:3px;">
+      <strong>One-Time Password</strong> (OTP)</span>
+      for verifying your DUK Bus Tracker account,
+      generated at <strong>{ist_now} IST</strong>, is:
+    </p>
+
+    <!-- OTP Box -->
+    <div style="background:#f4f4f4; border:1px solid #dddddd; border-radius:4px;
+                padding:18px 24px; margin:0 0 20px; display:inline-block; min-width:200px;">
+      <span style="font-family:'Courier New', Courier, monospace;
+                   font-size:34px; font-weight:700; letter-spacing:8px; color:#111111;">
+        {otp}
+      </span>
+    </div>
+
+    <p style="margin:0 0 8px; line-height:1.6;">
+      This <span style="background:#fff3cd; padding:1px 4px; border-radius:3px;"><strong>OTP</strong></span>
+      is valid for <strong>10 minutes</strong> and not to be shared with anyone.
+    </p>
+
+    <p style="margin:0 0 24px; line-height:1.6;">
+      If you did not initiate this request, please ignore this email.
+    </p>
+
+    <p style="margin:0 0 4px;">Regards,</p>
+    <p style="margin:0 0 32px;"><strong>DUK Bus Tracker Team</strong><br>
+      <span style="color:#888; font-size:13px;">Digital University Kerala</span>
+    </p>
+
+    <hr style="border:none; border-top:1px solid #eeeeee; margin:0 0 16px;">
+
+    <p style="margin:0; font-size:12px; color:#888888; font-style:italic;">
+      This is an auto-generated email. Do not reply to this email.
+    </p>
+
+  </div>
+</body>
+</html>"""
+
+    msg = MIMEText(html_body, "html")
     msg["Subject"] = f"Your DUK Bus Tracker verification code: {otp}"
-    msg["From"] = settings.SMTP_FROM
-    msg["To"] = to_email
-    msg.attach(MIMEText(html_body, "html"))
+    msg["From"]    = settings.SMTP_FROM
+    msg["To"]      = to_email
 
-    # Always log OTP so dev can verify even if email fails
+    # Always log OTP so dev can verify even if email delivery fails
     logger.info("[OTP] Code for %s: %s", to_email, otp)
 
     try:
@@ -75,9 +93,10 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
             server.ehlo()
             server.starttls()
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.sendmail(settings.SMTP_USER, [to_email], msg.as_string())
+            server.sendmail(settings.SMTP_FROM, [to_email], msg.as_string())
         logger.info("[EMAIL] OTP sent to %s", to_email)
         return True
     except Exception:
         logger.exception("[EMAIL] Failed to send OTP to %s", to_email)
         return False
+

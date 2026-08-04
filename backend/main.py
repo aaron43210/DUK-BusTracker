@@ -75,9 +75,15 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    
+    # Specific origins for local dev; add your production domain here when deploying
+    allow_origins=[
+        "http://localhost:5173",   # Vite admin dashboard (dev)
+        "http://localhost:3000",   # React alt port (dev)
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+    # All Vercel preview deployments
     allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
