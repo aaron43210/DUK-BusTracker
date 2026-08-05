@@ -633,9 +633,12 @@ code {
   border: 1px solid var(--border);
   /* clean border                        */
   border-radius: var(--radius-lg);
-  padding: 28px;
+  padding: 0;
   width: 560px;
   max-width: 92vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   /* classic drop shadow            */
   transform: translateY(12px);
@@ -650,7 +653,7 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 0;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
   /* separator between header and body */
@@ -683,7 +686,7 @@ code {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  margin-top: 20px;
+  margin-top: 0;
   padding-top: 16px;
   border-top: 1px solid var(--border);
   /* separator above the footer buttons */

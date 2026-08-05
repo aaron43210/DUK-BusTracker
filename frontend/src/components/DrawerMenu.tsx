@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Colors from '../theme/colors';
 import { getUser, clearSession, StoredUser } from '../services/storage';
 import { suggestionApi } from '../services/api';
+import { resetToLogin } from '../services/navigation';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.8;
 
@@ -96,6 +97,27 @@ export function DrawerProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const handleLogout = () => {
+    Alert.alert(
+      'Log Out',
+      'Are you sure you want to log out of DUK Bus Tracker?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: async () => {
+            await clearSession();
+            setUser(null);
+            closeDrawer();
+            resetToLogin();
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -245,6 +267,25 @@ export function DrawerProvider({ children }: { children: React.ReactNode }) {
                   )}
                 </View>
 
+                {/* Account / Logout */}
+                <Text style={S.sectionTitle}>ACCOUNT</Text>
+                <View style={S.card}>
+                  <TouchableOpacity
+                    style={S.logoutRow}
+                    onPress={handleLogout}
+                    activeOpacity={0.7}
+                  >
+                    <View style={S.logoutIconContainer}>
+                      <Ionicons name="log-out-outline" size={18} color={Colors.danger} />
+                    </View>
+                    <View style={S.rowContent}>
+                      <Text style={S.logoutLabel}>Log Out</Text>
+                      <Text style={S.logoutSubtext}>Sign out of this device</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={Colors.lightGray} />
+                  </TouchableOpacity>
+                </View>
+
               </ScrollView>
             </Animated.View>
           </>
@@ -286,4 +327,9 @@ const S = StyleSheet.create({
   submitBtn:            { flex: 1, height: 40, justifyContent: 'center', alignItems: 'center', borderRadius: 10, backgroundColor: Colors.mint },
   submitBtnDisabled:    { opacity: 0.45 },
   submitBtnText:        { fontSize: 14, fontWeight: '700', color: Colors.black },
+  // Logout
+  logoutRow:            { flexDirection: 'row', paddingVertical: 12, alignItems: 'center' },
+  logoutIconContainer:  { width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' },
+  logoutLabel:          { fontSize: 15, fontWeight: '700', color: Colors.danger },
+  logoutSubtext:        { fontSize: 12, color: Colors.medGray, marginTop: 2 },
 });

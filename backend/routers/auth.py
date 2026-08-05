@@ -33,11 +33,13 @@ class RegisterRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def duk_email_only(cls, v: str) -> str:
-        if not v.lower().endswith(f"@{settings.ALLOWED_EMAIL_DOMAIN}"):
+        v_clean = v.lower().strip()
+        allowed = (f"@{settings.ALLOWED_EMAIL_DOMAIN}", "@duk.ac.in", "@iitmk.ac.in")
+        if not any(v_clean.endswith(d) for d in allowed):
             raise ValueError(
-                f"Only @{settings.ALLOWED_EMAIL_DOMAIN} email addresses are allowed."
+                f"Only university email addresses (@{settings.ALLOWED_EMAIL_DOMAIN} / @iitmk.ac.in) are allowed."
             )
-        return v.lower()
+        return v_clean
 
 
 class VerifyRequest(BaseModel):

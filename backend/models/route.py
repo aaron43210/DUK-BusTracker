@@ -1,12 +1,10 @@
 """models/route.py \u2014 Route, BusStop, RouteStop models."""
 from sqlalchemy import (
-    Column, Integer, String, Float, ForeignKey, DateTime, Text, UniqueConstraint
+    Column, Integer, String, Float, ForeignKey, DateTime, Text, UniqueConstraint, Boolean
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
-
-
 
 
 class Route(Base):
@@ -32,6 +30,13 @@ class BusStop(Base):
 
     order_index = Column(Integer, nullable=False)  # position in route (0-based)
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+    # ── Route terminal role flags (admin-configurable) ────────────────────────
+    # Only one stop per route should be True for each role at a time
+    is_morning_origin      = Column(Boolean, default=False)  # Morning trip start depot
+    is_morning_destination = Column(Boolean, default=False)  # Morning trip final terminal
+    is_evening_origin      = Column(Boolean, default=False)  # Evening trip start depot
+    is_evening_destination = Column(Boolean, default=False)  # Evening trip final terminal
 
     __table_args__ = (UniqueConstraint("route_id", "order_index", name="uq_route_stop_order"),)
 

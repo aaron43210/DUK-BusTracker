@@ -37,9 +37,14 @@ async def lifespan(app: FastAPI):
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Auto-migrate OTP columns for multi-worker scalability
+        # Auto-migrate: OTP auth columns
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10);"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP WITH TIME ZONE;"))
+        # Auto-migrate: Route terminal role flags (admin-configurable origin/destination)
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_origin BOOLEAN DEFAULT FALSE;"))
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_destination BOOLEAN DEFAULT FALSE;"))
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_origin BOOLEAN DEFAULT FALSE;"))
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_destination BOOLEAN DEFAULT FALSE;"))
     logger.info("[STARTUP] Database tables ensured.")
 
     # Start the background notification scheduler (fires deferred push notifications)

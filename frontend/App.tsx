@@ -11,13 +11,9 @@ import RouteViewScreen from './src/screens/RouteViewScreen';
 import MapFullScreen from './src/screens/MapFullScreen';
 
 import { getToken, getUser } from './src/services/storage';
+import { navigationRef, RootStackParamList } from './src/services/navigation';
 
-export type RootStackParamList = {
-  ProfileSetup: undefined;
-  OtpVerify: { email: string; name: string; boardingPoint: any };
-  RouteView: { name?: string; boardingPoint?: any };
-  MapFull: undefined;
-};
+export type { RootStackParamList };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -57,7 +53,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <DrawerProvider>
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <Stack.Navigator
             initialRouteName={initialRoute}
             screenOptions={{ headerShown: false, animation: 'slide_from_right' }}

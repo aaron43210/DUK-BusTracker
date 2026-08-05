@@ -18,11 +18,14 @@ import {
   StyleSheet,
   LayoutAnimation,
   Keyboard,
-  Image
+  Image,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Colors from '../theme/colors';
+import { authApi } from '../services/api';
 
 const EMAIL_DOMAINS = ['@duk.ac.in', '@iitmk.ac.in'];
 
@@ -48,6 +51,7 @@ export default function ProfileSetupScreen({ navigation }: any) {
   const [domainDropOpen, setDomainDropOpen] = useState(false);
   const [selectedPoint, setSelected] = useState<any>(null);
   const [dropdownOpen, setDropdown] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // Animations
   const cardScale = useRef(new Animated.Value(0.95)).current;
@@ -97,14 +101,27 @@ export default function ProfileSetupScreen({ navigation }: any) {
     setDomainDropOpen(false);
   };
 
-  const handleContinue = () => {
-    if (!formValid) return;
+  const handleContinue = async () => {
+    if (!formValid || submitting) return;
     const fullEmail = `${emailPrefix.trim().toLowerCase()}${selectedDomain}`;
-    navigation?.navigate('OtpVerify', {
-      email: fullEmail,
-      name: name.trim(),
-      boardingPoint: selectedPoint,
-    });
+    setSubmitting(true);
+    try {
+      await authApi.register(name.trim(), fullEmail, selectedPoint?.id);
+      navigation?.navigate('OtpVerify', {
+        email: fullEmail,
+        name: name.trim(),
+        boardingPoint: selectedPoint,
+      });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const errorMsg =
+        typeof detail === 'string'
+          ? detail
+          : (err?.message || 'Could not connect to server. Please check your network.');
+      Alert.alert('Unable to send code', errorMsg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const arrowSpin = arrowRot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
@@ -260,13 +277,19 @@ export default function ProfileSetupScreen({ navigation }: any) {
 
             {/* Continue button */}
             <TouchableOpacity
-              style={[S.continueBtn, !formValid && S.continueBtnDisabled]}
+              style={[S.continueBtn, (!formValid || submitting) && S.continueBtnDisabled]}
               onPress={handleContinue}
-              disabled={!formValid}
+              disabled={!formValid || submitting}
               activeOpacity={0.7}
             >
-              <Text style={S.continueBtnText}>Send Verification Code</Text>
-              <Ionicons name="arrow-forward" size={18} color={Colors.black} />
+              {submitting ? (
+                <ActivityIndicator color={Colors.black} />
+              ) : (
+                <>
+                  <Text style={S.continueBtnText}>Send Verification Code</Text>
+                  <Ionicons name="arrow-forward" size={18} color={Colors.black} />
+                </>
+              )}
             </TouchableOpacity>
 
           </Animated.View>

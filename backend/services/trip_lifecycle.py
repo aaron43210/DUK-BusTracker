@@ -31,11 +31,11 @@ DESTINATION_RADIUS_M  = 300   # metres — bus "arrived" when within this of des
 GRACE_PERIOD_S        = 1200  # seconds — wait after POWER_OFF before marking completed (20 min)
 MOVEMENT_THRESHOLD_M  = 50    # metres — movement from start point to trigger on_trip
 
-
-
-# Route endpoint coordinates (from seed.py)
-CENTRAL_POLY = (8.5350, 76.9908)   # Morning origin  / Evening destination
-DUK          = (8.6158, 76.8527)   # Morning destination / Evening origin
+# ── Fallback coordinates (used if admin hasn't configured terminal stops yet) ──
+_FALLBACK_MORNING_ORIGIN      = (8.5350, 76.9908)  # Central Polytechnic
+_FALLBACK_MORNING_DESTINATION = (8.6158, 76.8527)  # Digital University Kerala
+_FALLBACK_EVENING_ORIGIN      = (8.6158, 76.8527)  # Digital University Kerala
+_FALLBACK_EVENING_DESTINATION = (8.5350, 76.9908)  # Central Polytechnic
 
 # Pending completion grace timers: trip_id → asyncio.Task
 COMPLETION_TIMERS: dict[int, asyncio.Task] = {}
@@ -46,14 +46,30 @@ def to_ist(utc_dt: datetime) -> datetime:
     return utc_dt + IST_OFFSET
 
 
-def get_destination(direction: str) -> tuple[float, float]:
-    """Return the destination lat/lon for a given direction."""
-    return DUK if direction == 'forward' else CENTRAL_POLY
+async def get_start_coords(db: AsyncSession, direction: str) -> tuple[float, float]:
+    """
+    Return the trip origin coordinates for a given direction.
+    Reads admin-configured role from DB; falls back to hardcoded coords if none set.
+    """
+    col = BusStop.is_morning_origin if direction == "forward" else BusStop.is_evening_origin
+    result = await db.execute(select(BusStop).where(col == True).limit(1))
+    stop = result.scalar_one_or_none()
+    if stop:
+        return (float(stop.lat), float(stop.lon))
+    return _FALLBACK_MORNING_ORIGIN if direction == "forward" else _FALLBACK_EVENING_ORIGIN
 
 
-def get_start(direction: str) -> tuple[float, float]:
-    """Return the origin lat/lon for a given direction."""
-    return CENTRAL_POLY if direction == 'forward' else DUK
+async def get_destination_coords(db: AsyncSession, direction: str) -> tuple[float, float]:
+    """
+    Return the trip destination coordinates for a given direction.
+    Reads admin-configured role from DB; falls back to hardcoded coords if none set.
+    """
+    col = BusStop.is_morning_destination if direction == "forward" else BusStop.is_evening_destination
+    result = await db.execute(select(BusStop).where(col == True).limit(1))
+    stop = result.scalar_one_or_none()
+    if stop:
+        return (float(stop.lat), float(stop.lon))
+    return _FALLBACK_MORNING_DESTINATION if direction == "forward" else _FALLBACK_EVENING_DESTINATION
 
 
 # ── Trip lookup ────────────────────────────────────────────────────────────────
@@ -169,7 +185,7 @@ async def handle_power_off(db: AsyncSession, manager, now_utc: datetime):
         )
         last_log = result.scalar_one_or_none()
         if last_log:
-            dest_lat, dest_lon = get_destination(trip.direction)
+            dest_lat, dest_lon = await get_destination_coords(db, trip.direction)
             dist = await get_osrm_distance_m(last_log.lat, last_log.lon, dest_lat, dest_lon)
             near_destination = dist <= DESTINATION_RADIUS_M
             logger.info("[LIFECYCLE] POWER_OFF: trip #%d, %.0fm from destination", trip.id, dist)
@@ -212,7 +228,7 @@ async def handle_gps_update(
         if trip.direction == 'reverse' and now_ist.hour < 17:
             return
 
-        start_lat, start_lon = get_start(trip.direction)
+        start_lat, start_lon = await get_start_coords(db, trip.direction)
         dist_from_start = await get_osrm_distance_m(start_lat, start_lon, lat, lon)
         logger.debug("[LIFECYCLE] Trip #%d — %.0fm from start", trip.id, dist_from_start)
 
@@ -220,7 +236,7 @@ async def handle_gps_update(
             await _mark_on_trip(db, trip, manager, now_utc)
 
     elif trip.status in ('on_trip', 'late'):
-        dest_lat, dest_lon = get_destination(trip.direction)
+        dest_lat, dest_lon = await get_destination_coords(db, trip.direction)
         dist_to_dest = await get_osrm_distance_m(lat, lon, dest_lat, dest_lon)
         logger.debug("[LIFECYCLE] Trip #%d — %.0fm from destination", trip.id, dist_to_dest)
 
@@ -290,7 +306,6 @@ async def auto_complete_expired_trips(db: AsyncSession) -> bool:
     Returns True if any trip was updated.
     """
     # Complete past trips
-    
     # Force use of Indian Standard Time rather than server local time
     now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
     time_mins = now_ist.hour * 60 + now_ist.minute

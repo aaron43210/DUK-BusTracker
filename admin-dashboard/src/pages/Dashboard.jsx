@@ -423,6 +423,14 @@ export default function Dashboard() {
   useEffect(() => {
     fetchAll();
 
+    // Auto-poll trip state every 5 seconds so status transitions (Active, Completed, Offline) update automatically without refreshing
+    const pollInterval = setInterval(async () => {
+      try {
+        const tripData = await getTripState().catch(() => null);
+        if (tripData) setTripState(tripData);
+      } catch (_) {}
+    }, 5000);
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/bus`;
     const ws = new WebSocket(wsUrl);
@@ -456,6 +464,7 @@ export default function Dashboard() {
     };
 
     return () => {
+      clearInterval(pollInterval);
       ws.close();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };

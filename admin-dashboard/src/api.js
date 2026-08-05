@@ -221,6 +221,15 @@ export async function deleteStop(id) {
   });
 }
 
+// setStopRole: PUT /admin/api/stops/:id/role — assign morning/evening origin or destination role
+// role: "morning_origin" | "morning_destination" | "evening_origin" | "evening_destination"
+export async function setStopRole(id, role) {
+  return apiFetch(`/admin/api/stops/${id}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  });
+}
+
 // ── Broadcast ─────────────────────────────────────────────────────────────────
 
 // sendBroadcast: POST /admin/api/broadcast — push notification to all users

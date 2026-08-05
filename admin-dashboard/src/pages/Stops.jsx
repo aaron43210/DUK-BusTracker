@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import React, { useState, useEffect, useRef } from 'react';
-import { getAdminStops, createStop, updateStop, deleteStop } from '../api.js';
+import { getAdminStops, createStop, updateStop, deleteStop, setStopRole } from '../api.js';
 import { useToast } from '../App.jsx';
 
 // ---------------------------------------------------------------------------
@@ -53,12 +53,21 @@ function Modal({ open, onClose, title, children, footer }) {
   return (
     <div className={`modal-overlay ${open ? 'open' : ''}`}>
       <div className="modal">
-        <div className="modal-header">
+        {/* Pinned header */}
+        <div className="modal-header" style={{ padding: '20px 28px 16px', flexShrink: 0 }}>
           <div className="modal-title">{title}</div>
           <button className="modal-close" onClick={onClose}>&#x2715;</button>
         </div>
-        {children}
-        {footer && <div className="modal-footer">{footer}</div>}
+        {/* Scrollable body */}
+        <div style={{ overflowY: 'auto', padding: '20px 28px 16px', flex: 1 }}>
+          {children}
+        </div>
+        {/* Pinned footer */}
+        {footer && (
+          <div className="modal-footer" style={{ padding: '16px 28px 20px', flexShrink: 0 }}>
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -222,7 +231,6 @@ export default function Stops() {
       order_index: parseInt(fOrder, 10) - 1, // Convert back to 0-based for DB
     };
 
-
     setSubmitting(true);
     try {
       if (editingId) {
@@ -263,6 +271,22 @@ export default function Stops() {
     }
   }
 
+  // ── Set terminal role ─────────────────────────────────────────────────────
+  const [roleSubmitting, setRoleSubmitting] = useState(null); // holds role string being set
+
+  async function handleSetRole(stopId, role) {
+    setRoleSubmitting(role);
+    try {
+      await setStopRole(stopId, role);
+      showToast(`Terminal role set successfully`);
+      fetchStops();
+    } catch (err) {
+      showToast(err.message || 'Failed to set role', 'error');
+    } finally {
+      setRoleSubmitting(null);
+    }
+  }
+
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -286,6 +310,61 @@ export default function Stops() {
         <button className="btn btn-primary" onClick={openAddModal}>Add Stop</button>
       </div>
 
+      {/* ── Route Terminal Configuration card ── */}
+      <div className="card" style={{ marginBottom: '20px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Route Terminal Configuration</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+          Select which stop acts as the origin or destination for each trip direction. Changing a role moves it immediately.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+          {[
+            { role: 'morning_origin',      label: 'Morning Origin',      flag: 'is_morning_origin' },
+            { role: 'morning_destination', label: 'Morning Destination', flag: 'is_morning_destination' },
+            { role: 'evening_origin',      label: 'Evening Origin',      flag: 'is_evening_origin' },
+            { role: 'evening_destination', label: 'Evening Destination', flag: 'is_evening_destination' },
+          ].map(({ role, label, flag }) => {
+            const currentHolder = stops.find(s => s[flag]);
+            const isLoading = roleSubmitting === role;
+            return (
+              <div key={role}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {label}
+                </div>
+                <select
+                  disabled={isLoading}
+                  value={currentHolder?.id ?? ''}
+                  onChange={e => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val)) handleSetRole(val, role);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    border: `2px solid ${currentHolder ? 'var(--text)' : 'var(--border)'}`,
+                    borderRadius: 0,
+                    background: 'var(--surface)',
+                    color: 'var(--text)',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    outline: 'none',
+                    opacity: isLoading ? 0.6 : 1,
+                  }}
+                >
+                  <option value="">— Not set —</option>
+                  {stops.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                {isLoading && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Saving…</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Stops table */}
       <div className="card">
         <div className="table-wrap">
@@ -297,7 +376,7 @@ export default function Stops() {
                 <th>Latitude</th>
                 <th>Longitude</th>
                 <th>Order</th>
-                <th style={{ paddingLeft: '32px' }}>Route</th>
+                <th>Route Terminal Role</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -306,26 +385,24 @@ export default function Stops() {
                 <tr key={s.id}>
                   <td><code>{i + 1}</code></td>
                   <td><strong style={{ fontWeight: 600 }}>{s.name}</strong></td>
-                  {/* fontFamily monospace makes coordinates align cleanly */}
-                  <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>
-                    {s.lat}
-                  </td>
-                  <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>
-                    {s.lon}
-                  </td>
+                  <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>{s.lat}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>{s.lon}</td>
                   <td className="text-muted">{s.order_index + 1}</td>
                   <td>
-                    <span className="badge badge-blue">Route {s.route_id}</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                      {s.is_morning_origin      && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>M.Origin</span>}
+                      {s.is_morning_destination && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>M.Dest</span>}
+                      {s.is_evening_origin      && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>E.Origin</span>}
+                      {s.is_evening_destination && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>E.Dest</span>}
+                      {!s.is_morning_origin && !s.is_morning_destination && !s.is_evening_origin && !s.is_evening_destination && (
+                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '6px' }}>
-                      {/* Arrow function captures the stop object in the closure */}
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEditModal(s)}>
-                        Edit
-                      </button>
-                      <button className="btn btn-danger btn-sm" onClick={() => openDeleteModal(s)}>
-                        Remove
-                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openEditModal(s)}>Edit</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => openDeleteModal(s)}>Remove</button>
                     </div>
                   </td>
                 </tr>
@@ -399,6 +476,7 @@ export default function Stops() {
             </div>
           )}
         </div>
+
       </Modal>
 
       {/* ── Delete confirmation modal ── */}

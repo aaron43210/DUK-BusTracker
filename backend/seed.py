@@ -56,7 +56,7 @@ async def seed():
             db.add(BusStop(route_id=route.id, **s))
 
         await db.commit()
-        print(f"✅ Seeded route '{route.name}' with {len(STOPS)} stops")
+        print(f" Seeded route '{route.name}' with {len(STOPS)} stops")
 
 
 if __name__ == "__main__":

@@ -713,13 +713,31 @@ class StopUpdate(BaseModel):
     order_index: Optional[int]   = None
 
 
+class StopRoleRequest(BaseModel):
+    role: str  # morning_origin | morning_destination | evening_origin | evening_destination | clear
+
+
 @router.get("/stops")
 async def list_stops(db: AsyncSession = Depends(get_db), _auth: None = Depends(require_admin)):
     result = await db.execute(
         select(BusStop).order_by(BusStop.route_id, BusStop.order_index)
     )
     stops = result.scalars().all()
-    return [{"id": s.id, "route_id": s.route_id, "name": s.name, "lat": s.lat, "lon": s.lon, "order_index": s.order_index} for s in stops]
+    return [
+        {
+            "id":                    s.id,
+            "route_id":              s.route_id,
+            "name":                  s.name,
+            "lat":                   s.lat,
+            "lon":                   s.lon,
+            "order_index":           s.order_index,
+            "is_morning_origin":      bool(s.is_morning_origin),
+            "is_morning_destination": bool(s.is_morning_destination),
+            "is_evening_origin":      bool(s.is_evening_origin),
+            "is_evening_destination": bool(s.is_evening_destination),
+        }
+        for s in stops
+    ]
 
 
 @router.post("/stops")
@@ -828,6 +846,46 @@ async def delete_stop(
     clear_stops_cache()
     
     return {"success": True}
+
+
+@router.put("/stops/{stop_id}/role")
+async def set_stop_role(
+    stop_id: int,
+    req:     StopRoleRequest,
+    db:      AsyncSession = Depends(get_db),
+    _auth:   None = Depends(require_admin),
+):
+    """
+    Assign a terminal role to a specific stop.
+    Roles: morning_origin | morning_destination | evening_origin | evening_destination
+    Setting a role automatically clears it from whichever stop previously held it.
+    """
+    role_col_map = {
+        "morning_origin":      "is_morning_origin",
+        "morning_destination": "is_morning_destination",
+        "evening_origin":      "is_evening_origin",
+        "evening_destination": "is_evening_destination",
+    }
+    col_name = role_col_map.get(req.role)
+    if not col_name:
+        raise HTTPException(status_code=400, detail=f"Invalid role '{req.role}'. Must be one of: {list(role_col_map.keys())}")
+
+    # Verify the target stop exists
+    result = await db.execute(select(BusStop).where(BusStop.id == stop_id))
+    stop = result.scalar_one_or_none()
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+
+    # Step 1: Clear this role from ALL stops (ensures only one stop holds each role)
+    await db.execute(update(BusStop).values({col_name: False}))
+
+    # Step 2: Assign the role exclusively to the selected stop
+    await db.execute(update(BusStop).where(BusStop.id == stop_id).values({col_name: True}))
+    await db.commit()
+
+    clear_stops_cache()
+    logger.info("[ADMIN] Stop #%d assigned role '%s'", stop_id, req.role)
+    return {"success": True, "stop_id": stop_id, "role": req.role, "stop_name": stop.name}
 
 
 # ── Route Management ──────────────────────────────────────────────────────────

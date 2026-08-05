@@ -5,12 +5,12 @@ Only sends to @duk.ac.in addresses.
 import smtplib
 import secrets
 import logging
+import email.utils
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from config import get_settings
 
-logger   = logging.getLogger(__name__)
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # IST offset used for OTP timestamp display
 _IST = timedelta(hours=5, minutes=30)
@@ -26,6 +26,14 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
     Send an OTP verification email.
     Returns True on success, False on failure.
     """
+    settings = get_settings()
+
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("[EMAIL] SMTP_USER or SMTP_PASSWORD not set in .env. Skipping email dispatch.")
+        # OTP is still logged below for development testing
+        logger.info("[OTP] (Dev fallback) Code for %s: %s", to_email, otp)
+        return False
+
     ist_now = (datetime.now(timezone.utc) + _IST).strftime("%Y-%m-%d %H:%M:%S")
 
     html_body = f"""<!DOCTYPE html>
@@ -80,23 +88,33 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
 </body>
 </html>"""
 
+    # Format From header cleanly (e.g. "DUK Bus Tracker <email@duk.ac.in>")
+    from_header = settings.SMTP_FROM or settings.SMTP_USER
+    # Pure email address for SMTP envelope MAIL FROM
+    envelope_sender = email.utils.parseaddr(from_header)[1] or settings.SMTP_USER
+
     msg = MIMEText(html_body, "html")
     msg["Subject"] = f"Your DUK Bus Tracker verification code: {otp}"
-    msg["From"]    = settings.SMTP_FROM
+    msg["From"]    = from_header
     msg["To"]      = to_email
 
     # Always log OTP so dev can verify even if email delivery fails
     logger.info("[OTP] Code for %s: %s", to_email, otp)
 
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.sendmail(settings.SMTP_FROM, [to_email], msg.as_string())
+        if settings.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.sendmail(envelope_sender, [to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.sendmail(envelope_sender, [to_email], msg.as_string())
         logger.info("[EMAIL] OTP sent to %s", to_email)
         return True
-    except Exception:
-        logger.exception("[EMAIL] Failed to send OTP to %s", to_email)
+    except Exception as exc:
+        logger.exception("[EMAIL] Failed to send OTP to %s: %s", to_email, exc)
         return False
 
