@@ -86,6 +86,10 @@ app.add_middleware(
         "http://localhost:3000",   # React alt port (dev)
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "http://localhost:5174",   # PWA dev server (dev)
+        "http://127.0.0.1:5174",
+        # production — update with actual domain at deploy time:
+        # "https://bus.duk.ac.in",
     ],
     # All Vercel preview deployments
     allow_origin_regex=r"https://.*\.vercel\.app",

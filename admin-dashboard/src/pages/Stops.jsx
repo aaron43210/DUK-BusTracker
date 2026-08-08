@@ -137,7 +137,13 @@ export default function Stops() {
           container: mapContainerRef.current,
           style: MAP_STYLE,
           center: [initLon, initLat],
-          zoom: 14
+          zoom: 14,
+          minZoom: 6,
+          maxZoom: 18,
+          maxBounds: [
+            [73.50, 7.50],
+            [84.50, 19.50]
+          ]
         });
 
         const geocoderApi = {
@@ -318,9 +324,9 @@ export default function Stops() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
           {[
-            { role: 'morning_origin',      label: 'Morning Origin',      flag: 'is_morning_origin' },
+            { role: 'morning_origin', label: 'Morning Origin', flag: 'is_morning_origin' },
             { role: 'morning_destination', label: 'Morning Destination', flag: 'is_morning_destination' },
-            { role: 'evening_origin',      label: 'Evening Origin',      flag: 'is_evening_origin' },
+            { role: 'evening_origin', label: 'Evening Origin', flag: 'is_evening_origin' },
             { role: 'evening_destination', label: 'Evening Destination', flag: 'is_evening_destination' },
           ].map(({ role, label, flag }) => {
             const currentHolder = stops.find(s => s[flag]);
@@ -390,9 +396,9 @@ export default function Stops() {
                   <td className="text-muted">{s.order_index + 1}</td>
                   <td>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                      {s.is_morning_origin      && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>M.Origin</span>}
+                      {s.is_morning_origin && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>M.Origin</span>}
                       {s.is_morning_destination && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>M.Dest</span>}
-                      {s.is_evening_origin      && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>E.Origin</span>}
+                      {s.is_evening_origin && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>E.Origin</span>}
                       {s.is_evening_destination && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>E.Dest</span>}
                       {!s.is_morning_origin && !s.is_morning_destination && !s.is_evening_origin && !s.is_evening_destination && (
                         <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>

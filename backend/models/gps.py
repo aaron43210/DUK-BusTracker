@@ -10,16 +10,19 @@ from database import Base
 
 
 class GpsLog(Base):
-    __tablename__ = "gps_logs"
+    __tablename__ = "gps_realtime"
 
     id          = Column(BigInteger, primary_key=True, autoincrement=True)
-    server_time = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    gps_time    = Column(DateTime(timezone=True), nullable=True)
+    server_time = Column("created_at", DateTime(timezone=True), server_default=func.now(), index=True)
     lat         = Column(Float, nullable=True)
     lon         = Column(Float, nullable=True)
+    speed       = Column(Float, nullable=True)
+    event       = Column(String(30), nullable=True)
 
-    speed       = Column(Float, nullable=True)   # km/h from QGPSLOC if available
-    event       = Column(String(30), nullable=True)  # POWER_ON | POWER_OFF | NULL
-    trip_id     = Column(Integer, ForeignKey("trips.id"), nullable=True)
+    @property
+    def created_at(self):
+        return self.server_time
 
-    trip = relationship("Trip", back_populates="gps_logs")
+    @property
+    def gps_time(self):
+        return self.server_time

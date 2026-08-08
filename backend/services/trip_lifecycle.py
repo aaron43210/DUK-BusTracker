@@ -179,7 +179,7 @@ async def handle_power_off(db: AsyncSession, manager, now_utc: datetime):
         # Uses GpsLog
         result = await db.execute(
             select(GpsLog)
-            .where(and_(GpsLog.trip_id == trip.id, GpsLog.lat.is_not(None)))
+            .where(GpsLog.lat.is_not(None))
             .order_by(GpsLog.id.desc())
             .limit(1)
         )
@@ -210,7 +210,6 @@ async def handle_gps_update(
 ):
     """
     Called on every valid GPS coordinate received.
-    - Links the log to the active trip.
     - Detects movement from route origin → triggers scheduled → on_trip.
     - Runs pgRouting-based proximity alerts for opted-in users.
     - Runs automatic ETA-based late notification.
@@ -220,8 +219,8 @@ async def handle_gps_update(
     if not trip:
         return
 
-    # Link this GPS log to the active trip
-    gps_log.trip_id = trip.id
+    if hasattr(gps_log, 'trip_id'):
+        gps_log.trip_id = trip.id
 
     if trip.status == 'scheduled':
         # Evening trip: only allow on_trip after 17:00 IST

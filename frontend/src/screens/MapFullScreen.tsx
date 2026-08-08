@@ -399,6 +399,12 @@ export default function MapFullScreenView({ navigation }: any) {
               return (
                 <Camera
                   ref={cameraRef}
+                  minZoomLevel={5}
+                  maxZoomLevel={18}
+                  maxBounds={{
+                    ne: [84.50, 19.50],
+                    sw: [73.50, 7.50],
+                  }}
                   initialViewState={{
                     center,
                     zoom,

@@ -88,6 +88,12 @@ function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, marker
     style: 'https://tiles.openfreemap.org/styles/liberty',
     center: [busLon, busLat],
     zoom: 14,
+    minZoom: 6,
+    maxZoom: 18,
+    maxBounds: [
+      [73.50, 7.50],  // Southwest: South of Kanyakumari / Lakshadweep Sea
+      [84.50, 19.50]  // Northeast: North of Telangana & Andhra Pradesh
+    ]
   });
   mapRef.current = map;
 
@@ -259,7 +265,7 @@ export default function Dashboard() {
     const startPos = currentPosRef.current || [targetLon, targetLat];
     const [startLon, startLat] = startPos;
 
-    // Ensure startPos is permanently in the trail so we don't get gaps/straight lines when bridging interrupted segments
+    // Ensure startPos is permanently in the trail so we don't get gaps
     const lastTrailPt = trailCoordsRef.current[trailCoordsRef.current.length - 1];
     if (!lastTrailPt || lastTrailPt[0] !== startPos[0] || lastTrailPt[1] !== startPos[1]) {
       trailCoordsRef.current.push(startPos);
@@ -279,12 +285,12 @@ export default function Dashboard() {
         }
       }
       if (mapRef.current && isAutoCenterRef.current) {
-        mapRef.current.panTo([targetLon, targetLat], { duration: 300 });
+        mapRef.current.easeTo({ center: [targetLon, targetLat], duration: 400 });
       }
       return;
     }
 
-    if (distKm < 0.0005) {
+    if (distKm < 0.0003) {
       markerRef.current.setLngLat([targetLon, targetLat]);
       currentPosRef.current = [targetLon, targetLat];
       return;
@@ -310,10 +316,11 @@ export default function Dashboard() {
       return;
     }
 
-    // Dynamically set animation duration to perfectly match the gap between pings so it NEVER stops moving
-    const duration = pingGapRef.current;
+    // Match animation duration to the 1.5s live polling interval for seamless gliding
+    const duration = Math.min(Math.max(pingGapRef.current || 1500, 1000), 2500);
     const startTime = performance.now();
     let appendedIdx = 0;
+    let lastTrailRender = 0;
 
     const step = (now) => {
       let progress = (now - startTime) / duration;
@@ -325,7 +332,6 @@ export default function Dashboard() {
         segIdx++;
       }
 
-      // Save passed OSRM road nodes permanently so they aren't lost if the animation is interrupted!
       while (appendedIdx < segIdx) {
         appendedIdx++;
         trailCoordsRef.current.push(polyline[appendedIdx]);
@@ -342,15 +348,32 @@ export default function Dashboard() {
       currentPosRef.current = [curLon, curLat];
       markerRef.current.setLngLat([curLon, curLat]);
 
-      if (mapRef.current && mapRef.current.getSource('live-trail')) {
-        const liveCoords = [...trailCoordsRef.current, [curLon, curLat]];
-        mapRef.current.getSource('live-trail').setData({
-          type: 'Feature', geometry: { type: 'LineString', coordinates: liveCoords }
-        });
+      // Calculate bearing angle to rotate bus icon in heading direction
+      const dLon = p2[0] - p1[0];
+      const dLat = p2[1] - p1[1];
+      if (Math.abs(dLon) > 0.000001 || Math.abs(dLat) > 0.000001) {
+        const rad = Math.atan2(dLon * Math.cos(curLat * Math.PI / 180), dLat);
+        const deg = (rad * 180 / Math.PI + 360) % 360;
+        const busDot = document.getElementById('bus-dot');
+        if (busDot) {
+          busDot.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+        }
       }
 
+      // Smooth 60 FPS camera lockstep: jumpTo eliminates all camera timer fights & stutter!
       if (mapRef.current && isAutoCenterRef.current) {
-        mapRef.current.panTo([curLon, curLat], { duration: 200 });
+        mapRef.current.jumpTo({ center: [curLon, curLat] });
+      }
+
+      // Throttled trail update to prevent WebGL frame drops
+      if (now - lastTrailRender > 100 || progress >= 1.0) {
+        lastTrailRender = now;
+        if (mapRef.current && mapRef.current.getSource('live-trail')) {
+          const liveCoords = [...trailCoordsRef.current, [curLon, curLat]];
+          mapRef.current.getSource('live-trail').setData({
+            type: 'Feature', geometry: { type: 'LineString', coordinates: liveCoords }
+          });
+        }
       }
 
       if (progress < 1.0) {
@@ -423,6 +446,24 @@ export default function Dashboard() {
   useEffect(() => {
     fetchAll();
 
+    // Auto-poll live GPS every 1.5 seconds so coordinates, speed, and map marker update smoothly without manual refresh
+    const gpsInterval = setInterval(async () => {
+      try {
+        const latest = await getLatestGps().catch(() => null);
+        if (latest && latest.lat && latest.lon) {
+          setGps(latest);
+          if (latest.is_live) {
+            animateBusTo(latest.lat, latest.lon);
+            setWsStatus('Live');
+          }
+          const busDot = document.getElementById('bus-dot');
+          if (busDot) {
+            busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', latest.is_live ? '#16a34a' : '#6b7280'));
+          }
+        }
+      } catch (_) {}
+    }, 1500);
+
     // Auto-poll trip state every 5 seconds so status transitions (Active, Completed, Offline) update automatically without refreshing
     const pollInterval = setInterval(async () => {
       try {
@@ -464,6 +505,7 @@ export default function Dashboard() {
     };
 
     return () => {
+      clearInterval(gpsInterval);
       clearInterval(pollInterval);
       ws.close();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);

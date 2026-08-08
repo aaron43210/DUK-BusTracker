@@ -4,7 +4,6 @@ Protected by X-Admin-Token header.
 """
 import asyncio
 import logging
-import math
 from datetime import date, datetime, timedelta, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
@@ -578,12 +577,14 @@ async def get_route_history(
 
         for log in logs:
             if last_lat is not None:
-                if haversine_km(last_lat, last_lon, log.lat, log.lon) < 0.02:
-                    continue  # skip stationary drift < 20 m
+                dist_m = haversine_km(last_lat, last_lon, log.lat, log.lon) * 1000.0
+                # Filter stationary parking drift while bus is stopped / idling
+                if (log.speed is not None and log.speed < 2.5 and dist_m < 15.0) or dist_m < 8.0:
+                    continue
             
-            # The server_time stored in the DB is natively IST, but marked as UTC by PG.
-            # Strip the timezone info so we can format it directly as Indian time.
+            # server_time is stored in IST (Indian Standard Time)
             ist_time = log.server_time.replace(tzinfo=None)
+            t_str = ist_time.strftime("%H:%M:%S")
 
             route_points.append({
                 "lat":  log.lat,
@@ -601,8 +602,7 @@ async def get_route_history(
                 })
             last_lat, last_lon = log.lat, log.lon
 
-        # Apply smart map matching (snaps on-road points, keeps off-road raw)
-        # This fixes the "spiderweb" effect caused by raw GPS hardware inaccuracies
+        # Apply high-fidelity OSRM road smoothing
         route_points = await _apply_map_matching(route_points)
 
         sessions.append({
@@ -632,68 +632,70 @@ async def _apply_map_matching(
     raw_points: list[dict],
 ) -> list[dict]:
     """
-    Applies high-fidelity map matching by requesting OSRM routes between consecutive GPS points.
-    This injects the exact physical road curvature, preventing straight lines from cutting through buildings.
+    Applies high-fidelity map matching using OSRM's /match API (Viterbi HMM).
+    Seamlessly fits noisy GPS tracks onto road centerlines and filters out off-road building drift.
     """
     if len(raw_points) < 2:
         return raw_points
 
-    osrm_url = "http://localhost:5001/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?geometries=geojson&overview=full"
-    
-    # Limit concurrency to prevent socket exhaustion (Too many open files)
-    sem = asyncio.Semaphore(100)
-    
-    async with httpx.AsyncClient() as client:
-        async def fetch_route(pt1, pt2, idx):
-            async with sem:
-                # Skip OSRM for tiny micro-movements to save overhead
-                dist_m = haversine_km(pt1["lat"], pt1["lon"], pt2["lat"], pt2["lon"]) * 1000
-                if dist_m < 5.0:
-                    return idx, [pt2]
-                    
-                try:
-                    url = osrm_url.format(lon1=pt1["lon"], lat1=pt1["lat"], lon2=pt2["lon"], lat2=pt2["lat"])
-                    resp = await client.get(url, timeout=3.0)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        
-                        # Smart Fallback: Check if the bus actually went deep off-road (like inside the college campus)
-                        wps = data.get("waypoints", [])
-                        if len(wps) == 2:
-                            if wps[0].get("distance", 0) > 15.0 or wps[1].get("distance", 0) > 15.0:
-                                # The bus is far away from the main mapped road. Use raw points!
-                                return idx, [pt2]
+    # Pre-filter: skip micro-jitter (< 8m) while moving
+    filtered_points = [raw_points[0]]
+    for pt in raw_points[1:]:
+        last_pt = filtered_points[-1]
+        dist_m = haversine_km(last_pt["lat"], last_pt["lon"], pt["lat"], pt["lon"]) * 1000.0
+        if dist_m >= 8.0:
+            filtered_points.append(pt)
 
-                        if data.get("routes") and data["routes"][0].get("geometry"):
-                            coords = data["routes"][0]["geometry"]["coordinates"]
-                            new_pts = []
-                            for lon, lat in coords:
-                                new_pts.append({
-                                    "lat": lat,
-                                    "lon": lon,
-                                    "time": pt2["time"],
-                                    "on_road": True
-                                })
-                            return idx, new_pts
-                except Exception:
-                    pass
-                # Fallback to the raw point if OSRM fails or bus is wildly off-road
-                return idx, [pt2]
+    if len(filtered_points) < 2:
+        return raw_points
 
-        tasks = []
-        for i in range(len(raw_points) - 1):
-            tasks.append(fetch_route(raw_points[i], raw_points[i+1], i))
-            
-        results = await asyncio.gather(*tasks)
+    CHUNK_SIZE = 60  # OSRM Match works optimally with 50-80 coordinates per batch
+    chunks = []
+    for i in range(0, len(filtered_points), CHUNK_SIZE - 1):
+        chunk = filtered_points[i:i + CHUNK_SIZE]
+        if len(chunk) >= 2:
+            chunks.append(chunk)
 
-    # Reconstruct the array in original order
-    results.sort(key=lambda x: x[0])
+    if not chunks:
+        chunks = [filtered_points]
+
+    matched_results = []
     
-    matched_points = [raw_points[0]]
-    for idx, pts in results:
-        matched_points.extend(pts)
-        
-    return matched_points
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        for chunk in chunks:
+            coords_str = ";".join([f"{pt['lon']:.6f},{pt['lat']:.6f}" for pt in chunk])
+            radiuses_str = ";".join(["40"] * len(chunk))
+            url = f"http://localhost:5001/match/v1/driving/{coords_str}?geometries=geojson&overview=full&tidy=true&gaps=ignore&radiuses={radiuses_str}"
+
+            chunk_matched = []
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("code") == "Ok" and data.get("matchings"):
+                        for matching in data["matchings"]:
+                            geom = matching.get("geometry", {}).get("coordinates", [])
+                            if geom:
+                                for lon, lat in geom:
+                                    chunk_matched.append({
+                                        "lat": lat,
+                                        "lon": lon,
+                                        "time": chunk[-1]["time"],
+                                        "on_road": True
+                                    })
+            except Exception:
+                pass
+
+            if chunk_matched:
+                if matched_results and chunk_matched:
+                    matched_results.extend(chunk_matched[1:])
+                else:
+                    matched_results.extend(chunk_matched)
+            else:
+                # Fallback to chunk's raw coordinates if unroutable
+                matched_results.extend(chunk)
+
+    return matched_results if matched_results else raw_points
 
 
 # ── Stop Management ───────────────────────────────────────────────────────────
@@ -1007,3 +1009,5 @@ async def delete_suggestion(sid: int, db: AsyncSession = Depends(get_db), _auth:
     await db.delete(s)
     await db.commit()
     return {"success": True}
+
+

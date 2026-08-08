@@ -27,12 +27,15 @@ def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return R * 2 * math.asin(math.sqrt(a))
 
 
+OSRM_LIVE_SNAP_RADIUS_M = 40   # 40m snap radius: allows bus bays and campus stops to snap cleanly to the road network
+
+
 async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Fetch the real driving distance in metres from the local OSRM server.
     If the server is down or returns an error, gracefully fallback to Haversine math.
     """
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?overview=false"
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}&continue_straight=false&overview=false"
     
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
@@ -60,7 +63,8 @@ async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destination
         coords.append(f"{lon:.6f},{lat:.6f}")
         
     coords_str = ";".join(coords)
-    url = f"{OSRM_BASE_URL}/table/v1/driving/{coords_str}?sources=0&annotations=distance"
+    radiuses_str = ";".join([str(OSRM_LIVE_SNAP_RADIUS_M)] * (len(destinations) + 1))
+    url = f"{OSRM_BASE_URL}/table/v1/driving/{coords_str}?sources=0&annotations=distance&radiuses={radiuses_str}"
     
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=3.0) as client:
@@ -78,7 +82,7 @@ async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destination
 
 
 def get_osrm_distance_m_sync(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?overview=false"
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}&continue_straight=false&overview=false"
     try:
         with httpx.Client(trust_env=False, timeout=2.0) as client:
             resp = client.get(url)
@@ -95,7 +99,7 @@ async def get_osrm_segment_geometry(lat1: float, lon1: float, lat2: float, lon2:
     """
     Fetch the turn-by-turn road geometry coordinates [[lon, lat], ...] connecting two consecutive points.
     """
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?overview=full&geometries=geojson"
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}&snapping=any&continue_straight=false&overview=full&geometries=geojson"
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
             resp = await client.get(url)

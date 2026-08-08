@@ -231,9 +231,21 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
 
     # Fallback: time-window logic (used for normal weekdays when no trips are in DB yet)
 
-    # Weekend or Friday after evening commute -> Next trip is Monday morning
-    if today.weekday() >= 5 or (today.weekday() == 4 and time_mins > EVENING_END_MINS):
-        return {"trip": "Unscheduled" if is_gps_alive else "Not in Service", "status": "completed", "next_trip_time": "Mon 07:30 AM"}
+    # Weekend (Saturday / Sunday) -> No regular service, next trip Monday morning
+    if today.weekday() >= 5:
+        return {
+            "trip": "Unscheduled" if is_gps_alive else "Not in Service",
+            "status": "active" if is_gps_alive else "weekend",
+            "next_trip_time": "Mon 07:30 AM",
+        }
+
+    # Friday after evening commute -> Friday trip completed, next is Monday morning
+    if today.weekday() == 4 and time_mins > EVENING_END_MINS:
+        return {
+            "trip": "Unscheduled" if is_gps_alive else "Not in Service",
+            "status": "active" if is_gps_alive else "completed",
+            "next_trip_time": "Mon 07:30 AM",
+        }
 
     if MORNING_START_MINS <= time_mins <= MORNING_END_MINS or EVENING_START_MINS <= time_mins <= EVENING_END_MINS:
         dir_name = "Morning" if time_mins <= MORNING_END_MINS else "Evening"
@@ -283,9 +295,9 @@ async def route_history(db: AsyncSession = Depends(get_db)):
     arrival_times: dict[str, str]  = {}
 
     for log in logs:
-        # server_time is already recorded in Indian time natively as per user instruction.
-        # We strip any UTC timezone flag that Supabase incorrectly attaches.
-        log_ist = log.server_time.replace(tzinfo=None)
+        # server_time is recorded in UTC by Supabase.
+        # Convert it to IST by adding 5 hours and 30 minutes.
+        log_ist = log.server_time.replace(tzinfo=None) + timedelta(hours=5, minutes=30)
         
         entry_hour = log_ist.hour
         log_is_evening = entry_hour > 17 or (entry_hour == 17 and log_ist.minute >= 30)
@@ -517,9 +529,14 @@ async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
 @router.get("/trip_trace/{trip_id}")
 async def get_trip_trace(trip_id: int, db: AsyncSession = Depends(get_db)):
     """Return historical OSRM-snapped trail for the given trip."""
+    trip_res = await db.execute(select(Trip).where(Trip.id == trip_id))
+    trip = trip_res.scalar_one_or_none()
+    if not trip or not trip.started_at:
+        return {"coordinates": []}
+    end_time = trip.ended_at or datetime.now(timezone.utc)
     result = await db.execute(
         select(GpsLog)
-        .where(GpsLog.trip_id == trip_id, GpsLog.lat.isnot(None))
+        .where(GpsLog.lat.isnot(None), GpsLog.server_time >= trip.started_at, GpsLog.server_time <= end_time)
         .order_by(GpsLog.id)
     )
     logs = result.scalars().all()

@@ -44,11 +44,11 @@ async function apiFetch(path, opts = {}) {
   try {
     res = await fetch(BASE + path, {
       headers: {
-        'Content-Type':  'application/json', 
-        'X-Admin-Token': _token,             
-        ...(opts.headers || {}),             
+        'Content-Type': 'application/json',
+        'X-Admin-Token': _token,
+        ...(opts.headers || {}),
       },
-      ...opts, 
+      ...opts,
     });
   } catch (err) {
     // If fetch itself throws (e.g. TypeError: Failed to fetch), the server is offline/unreachable
@@ -142,7 +142,7 @@ export async function createTrip(direction, tripDate = '', createReturn = false)
   let url = `/admin/api/trip/create?route_id=1&direction=${direction}`;
   if (tripDate) url += `&trip_date=${tripDate}`;
   if (createReturn) url += `&create_return=true`;
-  
+
   return apiFetch(url, {
     method: 'POST',
   });

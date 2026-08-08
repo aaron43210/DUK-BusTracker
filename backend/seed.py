@@ -26,8 +26,11 @@ STOPS = [
     {"order_index": 13, "name": "Sreekaryam",                    "lat": 8.5488, "lon": 76.9172},
     {"order_index": 14, "name": "Chavadimukku",                  "lat": 8.5510, "lon": 76.9114},
     {"order_index": 15, "name": "Karyavattom",                   "lat": 8.5665, "lon": 76.8912},
-    {"order_index": 16, "name": "IIITMK",                        "lat": 8.5588, "lon": 76.8790},
-    {"order_index": 17, "name": "Technopark Front",              "lat": 8.5578, "lon": 76.8763},
+    {"order_index": 16, "name": "Technopark Front",              "lat": 8.5580, "lon": 76.8770},
+    {"order_index": 17, "name": "IIITMK",                        "lat": 8.5588, "lon": 76.8790},
+
+
+
     {"order_index": 18, "name": "Kazhakuttam",                   "lat": 8.5668, "lon": 76.8743},
     {"order_index": 19, "name": "Pallipuram",                    "lat": 8.5979, "lon": 76.8546},
     {"order_index": 20, "name": "Digital University Kerala",     "lat": 8.6158, "lon": 76.8527},

@@ -160,6 +160,12 @@ export default function RouteHistory() {
                 style: MAP_STYLE,
                 center: [76.9366, 8.5241],
                 zoom: 12,
+                minZoom: 6,
+                maxZoom: 18,
+                maxBounds: [
+                    [73.50, 7.50],
+                    [84.50, 19.50]
+                ]
             });
             m.on("load", () => {
                 if (d) return;
@@ -174,6 +180,7 @@ export default function RouteHistory() {
             readyRef.current = false;
         };
     }, []);
+
 
     async function search() {
         if (!searchDate) {
@@ -267,15 +274,8 @@ export default function RouteHistory() {
             paint: { "line-color": "#2563eb", "line-width": 5, "line-opacity": 0.9 },
         });
 
-        // Snap full route points to exact road geometry using OSRM
-        snapRoute(pts).then((res) => {
-            if (res?.coordinates?.length && mapRef.current?.getSource("rh-trail")) {
-                mapRef.current.getSource("rh-trail").setData({
-                    type: "Feature",
-                    geometry: { type: "LineString", coordinates: res.coordinates },
-                });
-            }
-        }).catch(() => { });
+        // Display the actual high-precision GPS trail directly from hardware
+
 
 
         if (s.stop_crossings.length) {
