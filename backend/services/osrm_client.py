@@ -10,7 +10,8 @@ from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-OSRM_BASE_URL = "http://127.0.0.1:5001"
+# Use the public OSRM demo server for online usage
+OSRM_BASE_URL = "http://router.project-osrm.org"
 
 
 def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

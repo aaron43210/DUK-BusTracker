@@ -545,27 +545,24 @@ async def get_route_history(
     # Fetch completed trips in range
     # Find unique dates that have GPS logs in the range
     dates_res = await db.execute(
-        select(func.date(GpsLog.server_time)).where(
-            func.date(GpsLog.server_time).between(d_from, d_to),
+        select(func.date(GpsLog.ist_time)).where(
+            func.date(GpsLog.ist_time).between(d_from, d_to),
             GpsLog.lat.isnot(None)
-        ).distinct().order_by(func.date(GpsLog.server_time).desc())
+        ).distinct().order_by(func.date(GpsLog.ist_time).desc())
     )
     valid_dates = dates_res.scalars().all()
 
     sessions = []
     for d in valid_dates:
-        # Force the query bounds to be UTC aware. 
-        # Since the database natively stores IST time but tags it as UTC (+00),
-        # querying with a UTC-aware datetime prevents the database driver from shifting 
-        # our query boundary backwards by 5.5 hours!
-        day_start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+        # Use ist_time for date-boundary filtering — Supabase-computed, always correct IST
+        day_start = datetime.combine(d, datetime.min.time())
         day_end   = day_start + timedelta(days=1)
 
         logs_res = await db.execute(
             select(GpsLog).where(
                 GpsLog.lat.isnot(None),
-                GpsLog.server_time >= day_start,
-                GpsLog.server_time <  day_end,
+                GpsLog.ist_time >= day_start,
+                GpsLog.ist_time <  day_end,
             ).order_by(GpsLog.id)
         )
         logs = logs_res.scalars().all()
@@ -582,9 +579,10 @@ async def get_route_history(
                 if (log.speed is not None and log.speed < 2.5 and dist_m < 15.0) or dist_m < 8.0:
                     continue
             
-            # server_time is stored in IST (Indian Standard Time)
-            ist_time = log.server_time.replace(tzinfo=None)
-            t_str = ist_time.strftime("%H:%M:%S")
+            # ist_time is directly stored as IST by Supabase — no conversion needed
+            ist_time = log.ist_time
+            if ist_time is None:
+                continue
 
             route_points.append({
                 "lat":  log.lat,
@@ -616,8 +614,8 @@ async def get_route_history(
 
     # Return dates that have GPS logs so the UI calendar can restrict selection
     all_completed_res = await db.execute(
-        select(func.date(GpsLog.server_time)).where(
-            func.date(GpsLog.server_time) <= date.today(),
+        select(func.date(GpsLog.ist_time)).where(
+            func.date(GpsLog.ist_time) <= date.today(),
             GpsLog.lat.isnot(None)
         ).distinct()
     )

@@ -31,11 +31,7 @@ DESTINATION_RADIUS_M  = 300   # metres — bus "arrived" when within this of des
 GRACE_PERIOD_S        = 1200  # seconds — wait after POWER_OFF before marking completed (20 min)
 MOVEMENT_THRESHOLD_M  = 50    # metres — movement from start point to trigger on_trip
 
-# ── Fallback coordinates (used if admin hasn't configured terminal stops yet) ──
-_FALLBACK_MORNING_ORIGIN      = (8.5350, 76.9908)  # Central Polytechnic
-_FALLBACK_MORNING_DESTINATION = (8.6158, 76.8527)  # Digital University Kerala
-_FALLBACK_EVENING_ORIGIN      = (8.6158, 76.8527)  # Digital University Kerala
-_FALLBACK_EVENING_DESTINATION = (8.5350, 76.9908)  # Central Polytechnic
+# Fallbacks are dynamically fetched based on order_index if terminal stops are not configured.
 
 # Pending completion grace timers: trip_id → asyncio.Task
 COMPLETION_TIMERS: dict[int, asyncio.Task] = {}
@@ -49,27 +45,51 @@ def to_ist(utc_dt: datetime) -> datetime:
 async def get_start_coords(db: AsyncSession, direction: str) -> tuple[float, float]:
     """
     Return the trip origin coordinates for a given direction.
-    Reads admin-configured role from DB; falls back to hardcoded coords if none set.
+    Reads admin-configured role from DB; falls back to index-based coords if none set.
     """
     col = BusStop.is_morning_origin if direction == "forward" else BusStop.is_evening_origin
     result = await db.execute(select(BusStop).where(col == True).limit(1))
     stop = result.scalar_one_or_none()
     if stop:
         return (float(stop.lat), float(stop.lon))
-    return _FALLBACK_MORNING_ORIGIN if direction == "forward" else _FALLBACK_EVENING_ORIGIN
+        
+    # Fallback: Forward = lowest index (first stop), Reverse = highest index (last stop)
+    if direction == "forward":
+        res = await db.execute(select(BusStop).order_by(BusStop.order_index.asc()).limit(1))
+    else:
+        res = await db.execute(select(BusStop).order_by(BusStop.order_index.desc()).limit(1))
+        
+    fallback_stop = res.scalar_one_or_none()
+    if fallback_stop:
+        return (float(fallback_stop.lat), float(fallback_stop.lon))
+        
+    # Ultimate hard fallback if the bus stops table is entirely empty
+    return (8.5350, 76.9908) if direction == "forward" else (8.6158, 76.8527)
 
 
 async def get_destination_coords(db: AsyncSession, direction: str) -> tuple[float, float]:
     """
     Return the trip destination coordinates for a given direction.
-    Reads admin-configured role from DB; falls back to hardcoded coords if none set.
+    Reads admin-configured role from DB; falls back to index-based coords if none set.
     """
     col = BusStop.is_morning_destination if direction == "forward" else BusStop.is_evening_destination
     result = await db.execute(select(BusStop).where(col == True).limit(1))
     stop = result.scalar_one_or_none()
     if stop:
         return (float(stop.lat), float(stop.lon))
-    return _FALLBACK_MORNING_DESTINATION if direction == "forward" else _FALLBACK_EVENING_DESTINATION
+        
+    # Fallback: Forward = highest index (last stop), Reverse = lowest index (first stop)
+    if direction == "forward":
+        res = await db.execute(select(BusStop).order_by(BusStop.order_index.desc()).limit(1))
+    else:
+        res = await db.execute(select(BusStop).order_by(BusStop.order_index.asc()).limit(1))
+        
+    fallback_stop = res.scalar_one_or_none()
+    if fallback_stop:
+        return (float(fallback_stop.lat), float(fallback_stop.lon))
+        
+    # Ultimate hard fallback if the bus stops table is entirely empty
+    return (8.6158, 76.8527) if direction == "forward" else (8.5350, 76.9908)
 
 
 # ── Trip lookup ────────────────────────────────────────────────────────────────

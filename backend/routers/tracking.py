@@ -79,8 +79,7 @@ async def get_latest(db: AsyncSession = Depends(get_db)):
         "lat":         log.lat,
         "lon":         log.lon,
         "speed_kmh":   log.speed,
-        "server_time": log.server_time.isoformat() if log.server_time else None,
-        "gps_time":    log.gps_time.isoformat() if log.gps_time else None,
+        "server_time": log.ist_time.isoformat() if log.ist_time else log.server_time.isoformat() if log.server_time else None,
         "is_live":     is_live,
     }
 
@@ -270,22 +269,19 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
 @router.get("/route_history")
 async def route_history(db: AsyncSession = Depends(get_db)):
     """Visited stops and arrival times for today's current session."""
-    today_str = date.today().isoformat()
     stops_dicts = await _get_all_stops(db)
 
-    # Calculate current IST time
+    # Use ist_time (Supabase-computed) to determine current IST date and session type
     now_ist = datetime.now(timezone.utc) + IST_OFFSET
     is_evening = now_ist.hour > 17 or (now_ist.hour == 17 and now_ist.minute >= 30)
-
-    # Since server_time is ALREADY in IST natively (but incorrectly tagged as UTC by Postgres),
-    # start_of_today for querying server_time should just be the naive midnight datetime.
-    start_of_today_naive = datetime.combine(now_ist.date(), datetime.min.time())
+    today_ist = now_ist.date()
+    start_of_today = datetime.combine(today_ist, datetime.min.time())
 
     result = await db.execute(
         select(GpsLog)
         .where(
             GpsLog.lat.isnot(None),
-            GpsLog.server_time >= start_of_today_naive,
+            GpsLog.ist_time >= start_of_today,
         )
         .order_by(GpsLog.id)
     )
@@ -295,10 +291,11 @@ async def route_history(db: AsyncSession = Depends(get_db)):
     arrival_times: dict[str, str]  = {}
 
     for log in logs:
-        # server_time is recorded in UTC by Supabase.
-        # Convert it to IST by adding 5 hours and 30 minutes.
-        log_ist = log.server_time.replace(tzinfo=None) + timedelta(hours=5, minutes=30)
-        
+        # ist_time is directly stored as IST by Supabase — no conversion needed
+        log_ist = log.ist_time
+        if log_ist is None:
+            continue
+
         entry_hour = log_ist.hour
         log_is_evening = entry_hour > 17 or (entry_hour == 17 and log_ist.minute >= 30)
         if is_evening != log_is_evening:
@@ -487,12 +484,13 @@ async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
+    # Filter by ist_time — Supabase-computed IST column, so dates are always correct
     start = datetime.combine(target_date, datetime.min.time())
     end   = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
 
     result = await db.execute(
         select(GpsLog)
-        .where(GpsLog.lat.isnot(None), GpsLog.server_time >= start, GpsLog.server_time < end)
+        .where(GpsLog.lat.isnot(None), GpsLog.ist_time >= start, GpsLog.ist_time < end)
         .order_by(GpsLog.id)
     )
     logs = result.scalars().all()
@@ -500,25 +498,26 @@ async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
     route_points = []
     last_lat, last_lon = None, None
     for log in logs:
-        # server_time is natively IST, strip the erroneous UTC tag
-        log_ist = log.server_time.replace(tzinfo=None)
+        # ist_time is directly stored as IST by Supabase — no conversion needed
+        log_ist = log.ist_time
+        if log_ist is None:
+            continue
         hour = log_ist.hour
-        
+
         # Filter out trips outside 6 AM to 9 PM IST
         if hour < 6 or hour >= 21:
             continue
-            
+
         if last_lat is not None:
             dist = haversine_km(last_lat, last_lon, log.lat, log.lon)
             if dist < 0.05:  # < 50 m movement — skip (stationary drift)
                 continue
-            if dist > 2.0:   # > 2 km movement in one ping — this is a teleport or new trip!
-                route_points = [] # Reset trail for the new continuous segment
-                
+            if dist > 2.0:   # > 2 km movement in one ping — teleport / new trip, reset
+                route_points = []
+
         route_points.append({
             "lat":  log.lat,
             "lon":  log.lon,
-            # Pass naive ISO time so frontend parses it as local time
             "time": log_ist.isoformat(),
         })
         last_lat, last_lon = log.lat, log.lon

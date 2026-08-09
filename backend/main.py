@@ -45,6 +45,15 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_destination BOOLEAN DEFAULT FALSE;"))
         await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_origin BOOLEAN DEFAULT FALSE;"))
         await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_destination BOOLEAN DEFAULT FALSE;"))
+        # Auto-migrate: IST time column (Supabase DEFAULT handles new rows; back-fill old rows here)
+        await conn.execute(text("ALTER TABLE gps_realtime ADD COLUMN IF NOT EXISTS ist_time TIMESTAMP WITHOUT TIME ZONE;"))
+        
+        # Fix any incorrectly migrated historical data (the previous manual SQL shifted time backwards by 5.5 hours)
+        await conn.execute(text("""
+            UPDATE gps_realtime
+            SET ist_time = created_at AT TIME ZONE 'Asia/Kolkata'
+            WHERE ist_time IS NULL OR ist_time != (created_at AT TIME ZONE 'Asia/Kolkata');
+        """))
     logger.info("[STARTUP] Database tables ensured.")
 
     # Start the background notification scheduler (fires deferred push notifications)
