@@ -136,21 +136,25 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
     time_mins = now_ist.hour * 60 + now_ist.minute
 
     if trips:
+        is_deviated = False
+        if is_gps_alive and latest_gps and latest_gps.lat:
+            all_stops = await _get_all_stops(db)
+            nearest = find_nearest_stop_math(latest_gps.lat, latest_gps.lon, all_stops, threshold_km=10.0)
+            if nearest is None:
+                is_deviated = True
+
         active = next((t for t in trips if t.status in ("on_trip", "active", "late")), None)
         if active:
             target_status = active.status if active.status != "on_trip" else "active"
             if not is_gps_alive:
                 target_status = "connecting"
+            
+            display_trip = "Unscheduled" if is_deviated else format_trip_name(active.direction)
+            if is_deviated and target_status != "connecting":
+                target_status = "active"
                 
-            is_deviated = False
-            if is_gps_alive and latest_gps and latest_gps.lat:
-                all_stops = await _get_all_stops(db)
-                nearest = find_nearest_stop_math(latest_gps.lat, latest_gps.lon, all_stops, threshold_km=10.0)
-                if nearest is None:
-                    is_deviated = True
-                    
             return {
-                "trip":           format_trip_name(active.direction),
+                "trip":           display_trip,
                 "status":         target_status,
                 "trip_id":        active.id,
                 "late_by_minutes": active.late_by_minutes,
@@ -203,13 +207,19 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 is_active_window = True
                 
             if is_active_window:
+                display_trip = "Unscheduled" if is_deviated else format_trip_name(target_trip.direction)
+                status = "connecting"
+                if is_gps_alive:
+                    status = "active"
+
                 return {
-                    "trip": format_trip_name(target_trip.direction),
-                    "status": "active" if is_gps_alive else "connecting",
+                    "trip": display_trip,
+                    "status": status,
                     "trip_id": target_trip.id,
                     "late_by_minutes": None,
                     "cancellation_reason": None,
                     "next_trip_time": None,
+                    "is_deviated": is_deviated,
                 }
             else:
                 if is_gps_alive:
