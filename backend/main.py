@@ -89,7 +89,18 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Specific origins for local dev; add your production domain here when deploying
+    allow_origins=[
+        "http://localhost:5173",   # Vite admin dashboard (dev)
+        "http://localhost:3000",   # React alt port (dev)
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost:5174",   # PWA dev server (dev)
+        "http://127.0.0.1:5174",
+        "https://legendary-gaufre-1dc00c.netlify.app", # production domain
+    ],
+    # All Vercel and Netlify preview/production deployments
+    allow_origin_regex=r"https://.*\.(vercel|netlify)\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
