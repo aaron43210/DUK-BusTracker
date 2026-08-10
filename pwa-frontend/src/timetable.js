@@ -1,71 +1,18 @@
 /**
  * timetable.js — DUK Bus Tracker PWA
- * Static daily scheduled timetables for morning and evening routes.
- * Matches the RN app's RouteViewScreen.tsx schedules exactly.
+ *
+ * Scheduled arrival times are now stored in the backend DB on each BusStop
+ * (morning_time / evening_time columns) and served live via /api/v1/stops.
+ *
+ * DEFAULT_BUS_STOPS is used ONLY as a last-resort offline fallback if the API
+ * is unreachable on first load. These values must be kept in sync with the DB
+ * — but in practice the API should always be available after the first load
+ * because the PWA caches the response via the service worker.
  */
-
-export const MORNING_SCHEDULE = {
-  'Central Polytechnic':          '07:30 AM',
-  'Vattiyoorkavu Jn':             '07:35 AM',
-  'Manjadimoodu':                 '07:38 AM',
-  'Maruthankuzhi':                '07:42 AM',
-  'Sasthamangalam':               '07:47 AM',
-  'Vellayambalam':                '07:52 AM',
-  'Thampanoor':                   '08:00 AM',
-  'Chandrasekharan Nair Stadium': '08:08 AM',
-  'PMG':                          '08:12 AM',
-  'Pattom':                       '08:16 AM',
-  'Kesavadasapuram':              '08:22 AM',
-  'Ulloor':                       '08:27 AM',
-  'Pongumoodu':                   '08:32 AM',
-  'Sreekaryam':                   '08:37 AM',
-  'Chavadimukku':                 '08:42 AM',
-  'Karyavattom':                  '08:48 AM',
-  'IIITMK':                       '08:52 AM',
-  'Technopark Front':             '08:56 AM',
-  'Kazhakuttam':                  '09:02 AM',
-  'Pallipuram':                   '09:12 AM',
-  'Digital University Kerala':    '09:20 AM',
-};
-
-export const EVENING_SCHEDULE = {
-  'Digital University Kerala':    '05:40 PM',
-  'Pallipuram':                   '05:48 PM',
-  'Kazhakuttam':                  '05:58 PM',
-  'Technopark Front':             '06:04 PM',
-  'IIITMK':                       '06:08 PM',
-  'Karyavattom':                  '06:12 PM',
-  'Chavadimukku':                 '06:18 PM',
-  'Sreekaryam':                   '06:23 PM',
-  'Pongumoodu':                   '06:28 PM',
-  'Ulloor':                       '06:33 PM',
-  'Kesavadasapuram':              '06:38 PM',
-  'Pattom':                       '06:44 PM',
-  'PMG':                          '06:48 PM',
-  'Chandrasekharan Nair Stadium': '06:52 PM',
-  'Thampanoor':                   '07:00 PM',
-  'Vellayambalam':                '07:08 PM',
-  'Sasthamangalam':               '07:13 PM',
-  'Maruthankuzhi':                '07:18 PM',
-  'Manjadimoodu':                 '07:22 PM',
-  'Vattiyoorkavu Jn':             '07:25 PM',
-  'Central Polytechnic':          '07:30 PM',
-};
 
 export const EMAIL_DOMAINS = ['@duk.ac.in', '@iitmk.ac.in'];
 
-export const DEFAULT_BUS_STOPS = [
-  { id: 1,  name: 'Central Polytechnic',       desc: 'Starting point' },
-  { id: 2,  name: 'Vattiyoorkavu Jn',          desc: 'Vattiyoorkavu junction' },
-  { id: 5,  name: 'Sasthamangalam',            desc: 'Main road' },
-  { id: 9,  name: 'Pattom',                    desc: 'Pattom palace junction' },
-  { id: 10, name: 'Kesavadasapuram',           desc: 'Near MG College' },
-  { id: 13, name: 'Sreekaryam',               desc: 'Main road junction' },
-  { id: 15, name: 'Karyavattom',              desc: 'Near LNCPE' },
-  { id: 17, name: 'Technopark Front',         desc: 'Technopark Phase 1' },
-  { id: 18, name: 'Kazhakuttam',             desc: 'NH 66 bus stop' },
-  { id: 20, name: 'Digital University Kerala', desc: 'Final stop — DUK campus' },
-];
+
 
 // ── Time Utilities ─────────────────────────────────────────────────────────
 

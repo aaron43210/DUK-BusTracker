@@ -100,8 +100,8 @@ app.add_middleware(
         # production — update with actual domain at deploy time:
         # "https://bus.duk.ac.in",
     ],
-    # All Vercel preview deployments
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    # All Vercel and Netlify preview/production deployments
+    allow_origin_regex=r"https://.*\.(vercel|netlify)\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

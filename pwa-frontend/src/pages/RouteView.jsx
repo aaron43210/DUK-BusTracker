@@ -15,7 +15,6 @@ import {
 } from '../api';
 import { getUser } from '../storage';
 import {
-  MORNING_SCHEDULE, EVENING_SCHEDULE,
   getDelayBadge, computeEstimatedTime, getMapViewport,
   haversineDistKm, todayStr,
 } from '../timetable';
@@ -193,10 +192,9 @@ export default function RouteView() {
 
   // ── Derived data ─────────────────────────────────────────────────────────
   const direction = tripState?.trip?.direction || (new Date().getHours() >= 14 ? 'reverse' : 'forward');
-  const schedule = direction === 'forward' ? MORNING_SCHEDULE : EVENING_SCHEDULE;
   const lateMins = tripState?.trip?.late_by_minutes ?? null;
 
-  const tripStatus = tripState?.status ?? 'idle'; // 'active' | 'idle' | 'waiting' | 'cancelled'
+  const tripStatus = tripState?.status ?? 'idle';
   const isActive = tripStatus === 'active';
   const busIsLive = busPosition?.is_live === true;
   const isOnline = isActive;
@@ -205,9 +203,9 @@ export default function RouteView() {
   const visitedStops = routeHistory?.visitedStops || {};
   const arrivalTimes = routeHistory?.arrivalTimes || {};
 
-  const stopsToShow = stops.length ? stops : Object.keys(schedule).map((name, i) => ({
-    id: i + 1, name, lat: null, lon: null, order_index: i,
-  }));
+  // Use API stops or fallback; never need a schedule dict since times are on each stop object
+  // NetworkGate guarantees online — stops will always arrive from the API
+  const stopsToShow = stops;
 
   // Find "current next stop" = first unvisited stop
   const currentNextIdx = stopsToShow.findIndex(s => !visitedStops[s.name]);
@@ -374,7 +372,8 @@ export default function RouteView() {
                 {stopsToShow.map((stop, idx) => {
                   const isVisited = !!visitedStops[stop.name];
                   const isCurrent = idx === currentNextIdx;
-                  const scheduled = schedule[stop.name] || '';
+                  // Read scheduled time directly from the stop object (served by the API)
+                  const scheduled = (direction === 'forward' ? stop.morning_time : stop.evening_time) || '';
                   const actualTime = arrivalTimes[stop.name] || null;
                   const displayTime = isVisited
                     ? actualTime || scheduled

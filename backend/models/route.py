@@ -29,6 +29,8 @@ class BusStop(Base):
     lon         = Column(Float, nullable=False)
 
     order_index = Column(Integer, nullable=False)  # position in route (0-based)
+    morning_time = Column(String(10), nullable=True)  # e.g. "07:35 AM" — scheduled morning arrival
+    evening_time = Column(String(10), nullable=True)  # e.g. "07:25 PM" — scheduled evening arrival
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
 
     # ── Route terminal role flags (admin-configurable) ────────────────────────

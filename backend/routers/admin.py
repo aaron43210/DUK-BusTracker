@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, func
 from typing import List, Optional, Literal
@@ -696,18 +696,22 @@ async def _apply_map_matching(
 # ── Stop Management ───────────────────────────────────────────────────────────
 
 class StopCreate(BaseModel):
-    route_id:    int
-    name:        str
-    lat:         float
-    lon:         float
-    order_index: int
+    route_id:     int
+    name:         str
+    lat:          float
+    lon:          float
+    order_index:  int
+    morning_time: str   = Field(..., pattern=r'^\d{2}:\d{2} (AM|PM)$', description='e.g. 07:35 AM')
+    evening_time: str   = Field(..., pattern=r'^\d{2}:\d{2} (AM|PM)$', description='e.g. 06:12 PM')
 
 
 class StopUpdate(BaseModel):
-    name:        Optional[str]   = None
-    lat:         Optional[float] = None
-    lon:         Optional[float] = None
-    order_index: Optional[int]   = None
+    name:         Optional[str]   = None
+    lat:          Optional[float] = None
+    lon:          Optional[float] = None
+    order_index:  Optional[int]   = None
+    morning_time: Optional[str]   = None
+    evening_time: Optional[str]   = None
 
 
 class StopRoleRequest(BaseModel):
@@ -722,12 +726,14 @@ async def list_stops(db: AsyncSession = Depends(get_db), _auth: None = Depends(r
     stops = result.scalars().all()
     return [
         {
-            "id":                    s.id,
-            "route_id":              s.route_id,
-            "name":                  s.name,
-            "lat":                   s.lat,
-            "lon":                   s.lon,
-            "order_index":           s.order_index,
+            "id":                     s.id,
+            "route_id":               s.route_id,
+            "name":                   s.name,
+            "lat":                    s.lat,
+            "lon":                    s.lon,
+            "order_index":            s.order_index,
+            "morning_time":           s.morning_time,
+            "evening_time":           s.evening_time,
             "is_morning_origin":      bool(s.is_morning_origin),
             "is_morning_destination": bool(s.is_morning_destination),
             "is_evening_origin":      bool(s.is_evening_origin),

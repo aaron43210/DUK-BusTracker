@@ -49,54 +49,10 @@ function formatLastUpdated(isoString: string) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ', ' + d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-// ── Daily Scheduled Timetables ───────────────────────────────────────────────
-const MORNING_SCHEDULE: Record<string, string> = {
-  'Central Polytechnic':          '07:30 AM',
-  'Vattiyoorkavu Jn':             '07:35 AM',
-  'Manjadimoodu':                 '07:38 AM',
-  'Maruthankuzhi':                '07:42 AM',
-  'Sasthamangalam':               '07:47 AM',
-  'Vellayambalam':                '07:52 AM',
-  'Thampanoor':                   '08:00 AM',
-  'Chandrasekharan Nair Stadium': '08:08 AM',
-  'PMG':                          '08:12 AM',
-  'Pattom':                       '08:16 AM',
-  'Kesavadasapuram':              '08:22 AM',
-  'Ulloor':                       '08:27 AM',
-  'Pongumoodu':                   '08:32 AM',
-  'Sreekaryam':                   '08:37 AM',
-  'Chavadimukku':                 '08:42 AM',
-  'Karyavattom':                  '08:48 AM',
-  'IIITMK':                       '08:52 AM',
-  'Technopark Front':             '08:56 AM',
-  'Kazhakuttam':                  '09:02 AM',
-  'Pallipuram':                   '09:12 AM',
-  'Digital University Kerala':    '09:20 AM',
-};
 
-const EVENING_SCHEDULE: Record<string, string> = {
-  'Digital University Kerala':    '05:40 PM',
-  'Pallipuram':                   '05:48 PM',
-  'Kazhakuttam':                  '05:58 PM',
-  'Technopark Front':             '06:04 PM',
-  'IIITMK':                       '06:08 PM',
-  'Karyavattom':                  '06:12 PM',
-  'Chavadimukku':                 '06:18 PM',
-  'Sreekaryam':                   '06:23 PM',
-  'Pongumoodu':                   '06:28 PM',
-  'Ulloor':                       '06:33 PM',
-  'Kesavadasapuram':              '06:38 PM',
-  'Pattom':                       '06:44 PM',
-  'PMG':                          '06:48 PM',
-  'Chandrasekharan Nair Stadium': '06:52 PM',
-  'Thampanoor':                   '07:00 PM',
-  'Vellayambalam':                '07:08 PM',
-  'Sasthamangalam':               '07:13 PM',
-  'Maruthankuzhi':                '07:18 PM',
-  'Manjadimoodu':                 '07:22 PM',
-  'Vattiyoorkavu Jn':             '07:25 PM',
-  'Central Polytechnic':          '07:30 PM',
-};
+// ── Time Utilities ────────────────────────────────────────────────────────────
+// These are identical to the helpers in pwa-frontend/src/timetable.js.
+// Keep them here so the RN app stays standalone (no shared package yet).
 
 function parseTimeToMinutes(timeStr: string): number | null {
   if (!timeStr) return null;
@@ -118,6 +74,7 @@ function formatMinutesToTime(totalMins: number): string {
   if (hours > 12) hours -= 12;
   if (hours === 0) hours = 12;
   const hStr = hours < 10 ? `0${hours}` : `${hours}`;
+
   const mStr = mins < 10 ? `0${mins}` : `${mins}`;
   return `${hStr}:${mStr} ${period}`;
 }
@@ -430,7 +387,11 @@ export default function RouteViewScreen({ route, navigation }: any) {
     const isVisited = visitedNames.has(stop.name);
     const isCurrent = stop.name === currentStopName;
     const actualArrival = visitedMap[stop.name] ?? null;
-    const scheduledDaily = stop.scheduled_time ?? (isEvening ? EVENING_SCHEDULE[stop.name] : MORNING_SCHEDULE[stop.name]) ?? (isEvening ? '06:00 PM' : '08:00 AM');
+    // Scheduled time comes directly from the DB via the API — no hardcoded dict needed.
+    // Fallback to a generic time only if the admin hasn't set one yet.
+    const scheduledDaily = isEvening
+      ? (stop.evening_time ?? '06:00 PM')
+      : (stop.morning_time ?? '08:00 AM');
 
     let liveTime: string | null = null;
     let delayType: 'late' | 'ahead' | 'ontime' | 'none' = 'none';

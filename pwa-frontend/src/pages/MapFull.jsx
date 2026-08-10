@@ -15,7 +15,6 @@ import {
 } from '../api';
 import { getUser } from '../storage';
 import {
-  MORNING_SCHEDULE, EVENING_SCHEDULE,
   getDelayBadge, haversineDistKm, getMapViewport,
 } from '../timetable';
 

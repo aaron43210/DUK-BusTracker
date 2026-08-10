@@ -9,7 +9,7 @@ import TopBar      from '../components/TopBar';
 import DrawerMenu  from '../components/DrawerMenu';
 import { getUser, saveUser, clearSession } from '../storage';
 import { updatePreferences, getStops } from '../api';
-import { DEFAULT_BUS_STOPS } from '../timetable';
+import { EMAIL_DOMAINS } from '../timetable';
 import { useToast } from '../App';
 
 export default function Settings() {
@@ -18,7 +18,7 @@ export default function Settings() {
 
   const [drawerOpen,    setDrawerOpen]    = useState(false);
   const [user,          setUser]          = useState(null);
-  const [stops,         setStops]         = useState(DEFAULT_BUS_STOPS);
+  const [stops,         setStops]         = useState([]);
   const [notifEnabled,  setNotifEnabled]  = useState(false);
   const [alertEnabled,  setAlertEnabled]  = useState(false);
   const [alertType,     setAlertType]     = useState('time');

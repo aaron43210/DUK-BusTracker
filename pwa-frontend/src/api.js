@@ -98,10 +98,11 @@ export async function updatePreferences(prefs) {
 
 // ── Tracking ──────────────────────────────────────────────────────────────
 
-/** All bus stops from the DB */
+/** All bus stops from the DB, ordered by route + index. */
 export async function getStops() {
   return apiFetch('/api/v1/stops');
 }
+
 
 /** Latest GPS ping — { lat, lon, speed_kmh, is_live, recorded_at } */
 export async function getLatestGps() {

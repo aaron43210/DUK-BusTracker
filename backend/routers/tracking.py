@@ -49,7 +49,15 @@ async def _get_all_stops(db: AsyncSession) -> list[dict]:
     )
     stops = result.scalars().all()
     _STOPS_CACHE = [
-        {"id": s.id, "name": s.name, "lat": s.lat, "lon": s.lon, "order_index": s.order_index}
+        {
+            "id":           s.id,
+            "name":         s.name,
+            "lat":          s.lat,
+            "lon":          s.lon,
+            "order_index":  s.order_index,
+            "morning_time": s.morning_time,  # scheduled morning arrival e.g. "07:35 AM"
+            "evening_time": s.evening_time,  # scheduled evening arrival e.g. "07:25 PM"
+        }
         for s in stops
     ]
     return _STOPS_CACHE

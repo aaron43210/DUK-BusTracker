@@ -66,25 +66,66 @@ function RedirectIfAuthed({ children }) {
   return children;
 }
 
-// ── Offline detection ──────────────────────────────────────────────────────
-function OfflineBanner() {
+// ── Network Gate (full-screen offline wall) ───────────────────────────────
+function NetworkGate({ children }) {
   const [offline, setOffline] = useState(!navigator.onLine);
+
   useEffect(() => {
-    const on  = () => setOffline(false);
-    const off = () => setOffline(true);
-    window.addEventListener('online',  on);
-    window.addEventListener('offline', off);
-    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+    const goOnline  = () => setOffline(false);
+    const goOffline = () => setOffline(true);
+    window.addEventListener('online',  goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online',  goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
   }, []);
-  if (!offline) return null;
-  return <div className="offline-banner">⚡ You're offline — live data unavailable</div>;
+
+  if (!offline) return children;
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 9999,
+      background: '#f9fafb',
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      padding: '32px 24px', textAlign: 'center',
+    }}>
+      <div style={{
+        background: '#fff', borderRadius: '16px',
+        padding: '40px 28px', maxWidth: '360px', width: '100%',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
+      }}>
+        <div style={{ marginBottom: '24px' }}>
+          <img src="/duk-logo.png" alt="DUK Logo" style={{ height: '48px', objectFit: 'contain' }} />
+        </div>
+        <h2 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '10px', color: '#111' }}>
+          No Internet Connection
+        </h2>
+        <p style={{ fontSize: '14px', color: '#6b7280', lineHeight: '1.6', marginBottom: '28px' }}>
+          The bus tracker needs a live connection to show real-time bus locations and schedules.
+          Please check your Wi-Fi or mobile data.
+        </p>
+        <button
+          onClick={() => setOffline(!navigator.onLine)}
+          style={{
+            width: '100%', padding: '14px',
+            background: '#111', color: '#fff',
+            border: 'none', borderRadius: '10px',
+            fontSize: '15px', fontWeight: '600', cursor: 'pointer',
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ── App Shell wrapper ──────────────────────────────────────────────────────
 function AppShell() {
   return (
     <div className="app-shell">
-      <OfflineBanner />
       <Routes>
         {/* Public */}
         <Route path="/" element={<RedirectIfAuthed><ProfileSetup /></RedirectIfAuthed>} />
@@ -113,7 +154,7 @@ function DeviceGate({ children }) {
   if (isAndroid) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
-        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '120px', marginBottom: '24px', objectFit: 'contain' }} />
+        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Android App Available</h2>
         <p style={{ color: '#666', fontSize: '15px', lineHeight: '1.5', marginBottom: '32px' }}>
           We noticed you're on an Android device. To get the best experience, please download our dedicated native Android app!
@@ -135,7 +176,7 @@ function DeviceGate({ children }) {
   if (!isIos && !isLocalhost) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
-        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '120px', marginBottom: '24px', objectFit: 'contain' }} />
+        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Mobile App Only</h2>
         <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.5', marginBottom: '32px' }}>
           The Bus Tracker is only available as a mobile application.<br/><br/>
@@ -149,7 +190,7 @@ function DeviceGate({ children }) {
   if (isIos && !isStandalone && !isLocalhost) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
-        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '120px', marginBottom: '24px', objectFit: 'contain' }} />
+        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Install Required</h2>
         <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.5', marginBottom: '32px' }}>
           This app is designed to run natively on your iPhone. <br/><br/>
@@ -169,7 +210,9 @@ export default function App() {
     <BrowserRouter>
       <ToastProvider>
         <DeviceGate>
-          <AppShell />
+          <NetworkGate>
+            <AppShell />
+          </NetworkGate>
         </DeviceGate>
       </ToastProvider>
     </BrowserRouter>

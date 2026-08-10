@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
 import { register, getStops } from '../api';
-import { EMAIL_DOMAINS, DEFAULT_BUS_STOPS } from '../timetable';
+import { EMAIL_DOMAINS } from '../timetable';
 import { useToast } from '../App';
 import OtpModal from '../components/OtpModal';
 
@@ -18,7 +18,7 @@ export default function ProfileSetup() {
   const [name, setName] = useState('');
   const [emailPrefix, setEmailPrefix] = useState('');
   const [domain, setDomain] = useState(EMAIL_DOMAINS[0]);
-  const [stops, setStops] = useState(DEFAULT_BUS_STOPS);
+  const [stops, setStops] = useState([]);
   const [selectedStop, setSelectedStop] = useState(null);
   const [dropOpen, setDropOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -27,11 +27,16 @@ export default function ProfileSetup() {
   const domainDropRef = useRef(null);
   const [domainDropOpen, setDomainDropOpen] = useState(false);
 
-  // Fetch real stops from backend
   useEffect(() => {
     getStops()
-      .then(data => { if (Array.isArray(data) && data.length) setStops(data); })
-      .catch(() => { }); // silently fall back to defaults
+      .then(data => {
+        if (Array.isArray(data) && data.length) {
+          // Exclude the destination — users board at stops along the route
+          const boarding = data.filter(s => !s.name.toLowerCase().includes('digital university'));
+          setStops(boarding.length ? boarding : data);
+        }
+      })
+      .catch(() => {}); // NetworkGate blocks offline users — this catch is a safety no-op
   }, []);
 
   // Close both dropdowns on outside click
@@ -158,37 +163,47 @@ export default function ProfileSetup() {
         <div className="setup-field">
           <label className="setup-label">Boarding Stop</label>
           <div className="setup-dropdown" ref={dropRef}>
-            <button
-              type="button"
-              className={`setup-input setup-dropdown-btn${dropOpen ? ' setup-dropdown-btn--open' : ''}`}
-              onClick={() => setDropOpen(o => !o)}
-              aria-haspopup="listbox"
-              aria-expanded={dropOpen}
-            >
-              {selectedStop
-                ? <span>{selectedStop.name}</span>
-                : <span className="setup-placeholder">Select your boarding stop</span>
-              }
-              <span className="setup-dropdown-chevron">
-                {dropOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </span>
-            </button>
+            {/* Stops dropdown — NetworkGate guarantees we're online so stops will always load */}
+            {stops.length === 0 ? (
+              <div className="setup-input" style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 14, height: 14, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                Fetching stops…
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={`setup-input setup-dropdown-btn${dropOpen ? ' setup-dropdown-btn--open' : ''}`}
+                  onClick={() => setDropOpen(o => !o)}
+                  aria-haspopup="listbox"
+                  aria-expanded={dropOpen}
+                >
+                  {selectedStop
+                    ? <span>{selectedStop.name}</span>
+                    : <span className="setup-placeholder">Select your boarding stop</span>
+                  }
+                  <span className="setup-dropdown-chevron">
+                    {dropOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </span>
+                </button>
 
-            {dropOpen && (
-              <ul className="setup-dropdown-list" role="listbox">
-                {stops.map(stop => (
-                  <li
-                    key={stop.id}
-                    role="option"
-                    aria-selected={selectedStop?.id === stop.id}
-                    className={`setup-dropdown-item${selectedStop?.id === stop.id ? ' setup-dropdown-item--active' : ''}`}
-                    onClick={() => { setSelectedStop(stop); setDropOpen(false); }}
-                  >
-                    <span className="setup-dropdown-item__name">{stop.name}</span>
-                    {stop.desc && <span className="setup-dropdown-item__desc">{stop.desc}</span>}
-                  </li>
-                ))}
-              </ul>
+                {dropOpen && (
+                  <ul className="setup-dropdown-list" role="listbox">
+                    {stops.map(stop => (
+                      <li
+                        key={stop.id}
+                        role="option"
+                        aria-selected={selectedStop?.id === stop.id}
+                        className={`setup-dropdown-item${selectedStop?.id === stop.id ? ' setup-dropdown-item--active' : ''}`}
+                        onClick={() => { setSelectedStop(stop); setDropOpen(false); }}
+                      >
+                        <span className="setup-dropdown-item__name">{stop.name}</span>
+                        {stop.desc && <span className="setup-dropdown-item__desc">{stop.desc}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </div>
         </div>

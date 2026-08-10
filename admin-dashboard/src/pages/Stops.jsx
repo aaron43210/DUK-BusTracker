@@ -73,6 +73,35 @@ function Modal({ open, onClose, title, children, footer }) {
   );
 }
 
+// ── Time conversion helpers ───────────────────────────────────────────────────
+// DB stores times as "HH:MM AM" / "HH:MM PM" strings.
+// <input type="time"> works in 24h format ("HH:MM").
+// These two helpers convert between the two representations.
+
+/** "07:35 AM" or "18:12" → "07:35" or "18:12" (24-hour, for the time input) */
+function to24h(ampmStr) {
+  if (!ampmStr) return '';
+  const match = ampmStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+  if (!match) return ampmStr; // already 24h — return as-is
+  let h = parseInt(match[1], 10);
+  const m = match[2];
+  const period = match[3].toUpperCase();
+  if (period === 'PM' && h !== 12) h += 12;
+  if (period === 'AM' && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${m}`;
+}
+
+/** "07:35" → "07:35 AM" | "18:12" → "06:12 PM" (for storage in DB) */
+function to12h(h24Str) {
+  if (!h24Str) return '';
+  const [hStr, mStr] = h24Str.split(':');
+  let h = parseInt(hStr, 10);
+  const period = h >= 12 ? 'PM' : 'AM';
+  if (h > 12) h -= 12;
+  if (h === 0) h = 12;
+  return `${String(h).padStart(2, '0')}:${mStr} ${period}`;
+}
+
 // ── Stops page ────────────────────────────────────────────────────────────────
 export default function Stops() {
   const showToast = useToast();
@@ -85,10 +114,12 @@ export default function Stops() {
   const [editingId, setEditingId] = useState(null);
 
   // Form field values — split into separate useState for simplicity
-  const [fName, setFName] = useState(''); // stop name
-  const [fLat, setFLat] = useState(''); // latitude
-  const [fLon, setFLon] = useState(''); // longitude
-  const [fOrder, setFOrder] = useState(''); // order_index (position on the route)
+  const [fName, setFName] = useState('');         // stop name
+  const [fLat, setFLat] = useState('');           // latitude
+  const [fLon, setFLon] = useState('');           // longitude
+  const [fOrder, setFOrder] = useState('');       // order_index (position on the route)
+  const [fMorningTime, setFMorningTime] = useState(''); // scheduled morning arrival e.g. "07:35 AM"
+  const [fEveningTime, setFEveningTime] = useState(''); // scheduled evening arrival e.g. "06:12 PM"
 
   // Delete confirmation
   const [deleteModal, setDeleteModal] = useState(false);
@@ -205,51 +236,60 @@ export default function Stops() {
 
   // ── Open Add modal ────────────────────────────────────────────────────────
   function openAddModal() {
-    setEditingId(null);           // null = create mode
-    setFName(''); setFLat(''); setFLon(''); setFOrder(''); // clear all fields
+    setEditingId(null);
+    setFName(''); setFLat(''); setFLon(''); setFOrder('');
+    setFMorningTime(''); setFEveningTime('');
     setStopModal(true);
   }
 
   // ── Open Edit modal ───────────────────────────────────────────────────────
   function openEditModal(stop) {
-    setEditingId(stop.id);        // non-null = edit mode
+    setEditingId(stop.id);
     setFName(stop.name);
-    setFLat(String(stop.lat));    // convert number → string so input value is controlled
+    setFLat(String(stop.lat));
     setFLon(String(stop.lon));
-    setFOrder(String(stop.order_index + 1)); // 1-based indexing for UI
+    setFOrder(String(stop.order_index + 1));
+    // Convert stored AM/PM string → 24h for <input type="time">
+    setFMorningTime(to24h(stop.morning_time || ''));
+    setFEveningTime(to24h(stop.evening_time || ''));
     setStopModal(true);
   }
 
-  // Save Stop
-  // Validates the form fields before creating a new stop or updating an existing stop.
   async function saveStop() {
-    // Ensure all required fields are filled
     if (!fName.trim() || !fLat || !fLon || fOrder === '') {
-      showToast('All fields are required', 'error');
+      showToast('Name, location and order are required', 'error');
+      return;
+    }
+    if (!fMorningTime) {
+      showToast('Morning Time is required', 'error');
+      return;
+    }
+    if (!fEveningTime) {
+      showToast('Evening Time is required', 'error');
       return;
     }
 
-    // Build the body — parseFloat/parseInt convert string inputs to numbers
     const body = {
-      name: fName.trim(),
-      lat: parseFloat(fLat),
-      lon: parseFloat(fLon),
-      order_index: parseInt(fOrder, 10) - 1, // Convert back to 0-based for DB
+      name:         fName.trim(),
+      lat:          parseFloat(fLat),
+      lon:          parseFloat(fLon),
+      order_index:  parseInt(fOrder, 10) - 1,
+      // Convert 24h picker value back to AM/PM string for DB storage
+      morning_time: to12h(fMorningTime),
+      evening_time: to12h(fEveningTime),
     };
 
     setSubmitting(true);
     try {
       if (editingId) {
-        // Edit mode: PUT /admin/api/stops/:id
         await updateStop(editingId, body);
         showToast('Stop updated');
       } else {
-        // Create mode: POST /admin/api/stops (route_id 1 = default route)
-        await createStop({ ...body, route_id: 1 }); // spread merges body + route_id
+        await createStop({ ...body, route_id: 1 });
         showToast('Stop added');
       }
       setStopModal(false);
-      fetchStops(); // refresh the table
+      fetchStops();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -382,6 +422,8 @@ export default function Stops() {
                 <th>Latitude</th>
                 <th>Longitude</th>
                 <th>Order</th>
+                <th>Morning Time</th>
+                <th>Evening Time</th>
                 <th>Route Terminal Role</th>
                 <th>Actions</th>
               </tr>
@@ -394,6 +436,12 @@ export default function Stops() {
                   <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>{s.lat}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>{s.lon}</td>
                   <td className="text-muted">{s.order_index + 1}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {s.morning_time || '—'}
+                  </td>
+                  <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {s.evening_time || '—'}
+                  </td>
                   <td>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                       {s.is_morning_origin && <span style={{ background: '#e5e7eb', color: '#111', fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '2px', letterSpacing: '0.03em' }}>M.Origin</span>}
@@ -461,6 +509,26 @@ export default function Stops() {
               min="0"
               value={fOrder}
               onChange={e => setFOrder(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="col-2" style={{ marginTop: '8px' }}>
+          <div className="form-group">
+            <label className="form-label">Morning Time</label>
+            <input
+              type="time"
+              className="form-input"
+              value={fMorningTime}
+              onChange={e => setFMorningTime(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Evening Time</label>
+            <input
+              type="time"
+              className="form-input"
+              value={fEveningTime}
+              onChange={e => setFEveningTime(e.target.value)}
             />
           </div>
         </div>
