@@ -57,12 +57,17 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
     </p>
 
     <!-- OTP Box -->
-    <div style="background:#f4f4f4; border:1px solid #dddddd; border-radius:4px;
-                padding:18px 24px; margin:0 0 20px; display:inline-block; min-width:200px;">
-      <span style="font-family:'Courier New', Courier, monospace;
-                   font-size:34px; font-weight:700; letter-spacing:8px; color:#111111;">
-        {otp}
-      </span>
+    <div title="Double-tap to copy"
+         style="background:#f4f4f4; border:1px solid #dddddd; border-radius:8px;
+                padding:16px 24px; margin:0 0 20px; display:inline-block; min-width:200px; cursor:pointer;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-family:'Courier New', Courier, monospace;
+                     font-size:34px; font-weight:700; letter-spacing:8px; color:#111111;
+                     user-select:all; -webkit-user-select:all; cursor:text;">
+          {otp}
+        </span>
+        <span style="font-size:24px; margin-left:16px; color:#666;" title="Double-tap the number to copy">📋</span>
+      </div>
     </div>
 
     <p style="margin:0 0 8px; line-height:1.6;">
