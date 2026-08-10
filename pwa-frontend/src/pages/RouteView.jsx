@@ -72,19 +72,55 @@ export default function RouteView() {
       if (seg?.coordinates?.length > 1) polyline = seg.coordinates;
     } catch (_) {}
 
-    if (animIntervalRef.current) clearInterval(animIntervalRef.current);
-    const steps = Math.min(polyline.length, 12);
-    const chunk = Math.max(1, Math.floor(polyline.length / steps));
-    let idx = 0;
-    animIntervalRef.current = setInterval(() => {
-      if (idx >= polyline.length) {
-        clearInterval(animIntervalRef.current);
-        currentPosRef.current = [targetLon, targetLat];
-        return;
+    // Calculate cumulative distances for smooth interpolation
+    const cumDists = [0];
+    for (let i = 1; i < polyline.length; i++) {
+      cumDists.push(cumDists[i - 1] + haversineDistKm(polyline[i - 1][0], polyline[i - 1][1], polyline[i][0], polyline[i][1]));
+    }
+    const totalDist = cumDists[cumDists.length - 1];
+
+    if (totalDist <= 0.00001) {
+      setAnimatedBus([targetLon, targetLat]);
+      currentPosRef.current = [targetLon, targetLat];
+      return;
+    }
+
+    if (animIntervalRef.current) cancelAnimationFrame(animIntervalRef.current);
+    
+    const duration = POLL_MS;
+    const startTime = performance.now();
+
+    const step = (now) => {
+      let progress = (now - startTime) / duration;
+      if (progress > 1.0) progress = 1.0;
+
+      const currentDist = progress * totalDist;
+      let segIdx = 0;
+      while (segIdx < cumDists.length - 2 && cumDists[segIdx + 1] < currentDist) {
+        segIdx++;
       }
-      setAnimatedBus([polyline[idx][0], polyline[idx][1]]);
-      idx += chunk;
-    }, Math.floor(POLL_MS / steps));
+
+      const p1 = polyline[segIdx];
+      const p2 = polyline[segIdx + 1];
+      const segSpan = (cumDists[segIdx + 1] - cumDists[segIdx]) || 0.00001;
+      const segFrac = Math.max(0, Math.min(1, (currentDist - cumDists[segIdx]) / segSpan));
+
+      const curLon = p1[0] + (p2[0] - p1[0]) * segFrac;
+      const curLat = p1[1] + (p2[1] - p1[1]) * segFrac;
+
+      setAnimatedBus([curLon, curLat]);
+      currentPosRef.current = [curLon, curLat];
+
+      if (progress < 1.0) {
+        animIntervalRef.current = requestAnimationFrame(step);
+      } else {
+        const finalPoint = polyline[polyline.length - 1];
+        setAnimatedBus(finalPoint);
+        currentPosRef.current = finalPoint;
+      }
+    };
+    
+    animIntervalRef.current = requestAnimationFrame(step);
   }, []);
 
   const fetchAll = useCallback(async (showLoading = false) => {
@@ -151,7 +187,7 @@ export default function RouteView() {
     intervalRef.current = setInterval(() => fetchAll(false), POLL_MS);
     return () => {
       clearInterval(intervalRef.current);
-      clearInterval(animIntervalRef.current);
+      cancelAnimationFrame(animIntervalRef.current);
     };
   }, [fetchAll]);
 
@@ -354,9 +390,19 @@ export default function RouteView() {
                   
                   if (isVisited) {
                     statusSubtext = 'Arrived';
+                    if (lateMins > 1) delayType = 'late';
+                    else if (lateMins < -1) delayType = 'ahead';
                   } else if (isOnline) {
+                    if (lateMins > 1) delayType = 'late';
+                    else if (lateMins < -1) delayType = 'ahead';
+                    else delayType = 'ontime';
+                    
                     if (isCurrent) {
                       statusSubtext = eta?.eta_minutes != null ? `Approaching • ETA ${Math.round(eta.eta_minutes)} min` : 'Next Stop';
+                    } else {
+                      if (delayType === 'late') statusSubtext = `+${lateMins}m delay`;
+                      else if (delayType === 'ahead') statusSubtext = `${Math.abs(lateMins)}m ahead`;
+                      else statusSubtext = 'On time';
                     }
                   }
 
@@ -365,7 +411,7 @@ export default function RouteView() {
                       {/* Left: Time */}
                       <div className="ios-time-col">
                         <div className="ios-sched-time">{scheduled}</div>
-                        {isVisited || isCurrent ? (
+                        {isVisited || isOnline ? (
                           <div className={`ios-live-time ${delayType === 'late' ? 'ios-time-late' : ''}`}>
                             {displayTime}
                           </div>
@@ -378,7 +424,7 @@ export default function RouteView() {
                       <div className="ios-track-col">
                         {isCurrent ? (
                           <div className="ios-bus-badge-wrap">
-                            <div className="ios-bus-badge-circle">🚌</div>
+                            <div className="ios-bus-badge-circle">🚍</div>
                           </div>
                         ) : (
                           <div className={`ios-track-dot ${isVisited ? 'ios-track-dot-visited' : ''}`} />
@@ -393,7 +439,7 @@ export default function RouteView() {
                         <div className={`ios-stop-name ${isCurrent ? 'ios-stop-name-current' : ''} ${isVisited ? 'ios-stop-name-visited' : ''}`}>
                           {stop.name}
                         </div>
-                        <div className={`ios-stop-subtext ${isCurrent ? 'ios-stop-subtext-current' : ''}`}>
+                        <div className={`ios-stop-subtext ${isCurrent ? 'ios-stop-subtext-current' : ''} ${delayType === 'late' && !isVisited ? 'ios-stop-subtext-late' : ''} ${(delayType === 'ahead' || delayType === 'ontime') && !isVisited && isOnline && !isCurrent ? 'ios-stop-subtext-ahead' : ''}`}>
                           {statusSubtext}
                         </div>
                       </div>

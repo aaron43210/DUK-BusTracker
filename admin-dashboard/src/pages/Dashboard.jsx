@@ -348,17 +348,17 @@ export default function Dashboard() {
       currentPosRef.current = [curLon, curLat];
       markerRef.current.setLngLat([curLon, curLat]);
 
-      // Calculate bearing angle to rotate bus icon in heading direction
-      const dLon = p2[0] - p1[0];
-      const dLat = p2[1] - p1[1];
-      if (Math.abs(dLon) > 0.000001 || Math.abs(dLat) > 0.000001) {
-        const rad = Math.atan2(dLon * Math.cos(curLat * Math.PI / 180), dLat);
-        const deg = (rad * 180 / Math.PI + 360) % 360;
-        const busDot = document.getElementById('bus-dot');
-        if (busDot) {
-          busDot.style.transform = `rotate(${deg.toFixed(1)}deg)`;
-        }
-      }
+      // Calculate bearing angle to rotate bus icon in heading direction (DISABLED per user request to keep marker stable)
+      // const dLon = p2[0] - p1[0];
+      // const dLat = p2[1] - p1[1];
+      // if (Math.abs(dLon) > 0.000001 || Math.abs(dLat) > 0.000001) {
+      //   const rad = Math.atan2(dLon * Math.cos(curLat * Math.PI / 180), dLat);
+      //   const deg = (rad * 180 / Math.PI + 360) % 360;
+      //   const busDot = document.getElementById('bus-dot');
+      //   if (busDot) {
+      //     busDot.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+      //   }
+      // }
 
       // Smooth 60 FPS camera lockstep: jumpTo eliminates all camera timer fights & stutter!
       if (mapRef.current && isAutoCenterRef.current) {

@@ -6,12 +6,12 @@ Falls back to Haversine straight-line distance if the server is unreachable.
 import httpx
 import logging
 import math
+import os
 from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Use the public OSRM demo server for online usage
-OSRM_BASE_URL = "http://router.project-osrm.org"
+OSRM_BASE_URL = os.environ.get("OSRM_URL", "http://127.0.0.1:5001")
 
 
 def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

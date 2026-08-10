@@ -141,6 +141,14 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
             target_status = active.status if active.status != "on_trip" else "active"
             if not is_gps_alive:
                 target_status = "connecting"
+                
+            is_deviated = False
+            if is_gps_alive and latest_gps and latest_gps.lat:
+                all_stops = await _get_all_stops(db)
+                nearest = find_nearest_stop_math(latest_gps.lat, latest_gps.lon, all_stops, threshold_km=10.0)
+                if nearest is None:
+                    is_deviated = True
+                    
             return {
                 "trip":           format_trip_name(active.direction),
                 "status":         target_status,
@@ -148,6 +156,7 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 "late_by_minutes": active.late_by_minutes,
                 "cancellation_reason": None,
                 "next_trip_time": None,
+                "is_deviated":    is_deviated,
             }
         cancelled = next((t for t in trips if t.status == "cancelled"), None)
         if cancelled:
@@ -510,10 +519,10 @@ async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
 
         if last_lat is not None:
             dist = haversine_km(last_lat, last_lon, log.lat, log.lon)
-            if dist < 0.05:  # < 50 m movement — skip (stationary drift)
+            if dist < 0.01:  # < 10 m movement — skip (stationary drift)
                 continue
-            if dist > 2.0:   # > 2 km movement in one ping — teleport / new trip, reset
-                route_points = []
+            if dist > 10.0:  # > 10 km jump (massive GPS glitch) — just skip the glitched point
+                continue
 
         route_points.append({
             "lat":  log.lat,

@@ -1225,9 +1225,9 @@ textarea {
 }
 
 .ios-bus-badge-wrap {
-  width: 28px;
-  height: 28px;
-  border-radius: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
   background: rgba(37, 99, 235, 0.18);
   display: flex;
   align-items: center;
@@ -1236,15 +1236,15 @@ textarea {
 }
 
 .ios-bus-badge-circle {
-  width: 22px;
-  height: 22px;
-  border-radius: 11px;
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
   background: #2563eb;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
-  font-size: 11px;
+  font-size: 15px;
   box-shadow: 0 2px 4px rgba(37, 99, 235, 0.35);
 }
 
@@ -1282,6 +1282,16 @@ textarea {
 
 .ios-stop-subtext-current {
   color: #2563eb;
+  font-weight: 700;
+}
+
+.ios-stop-subtext-late {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.ios-stop-subtext-ahead {
+  color: #16a34a;
   font-weight: 700;
 }
 
