@@ -1317,7 +1317,7 @@ textarea {
 }
 
 .ios-map-card {
-  height: 400px;
+  height: 550px;
   border-radius: 20px;
   overflow: hidden;
   position: relative;
@@ -2079,21 +2079,23 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   min-height: 100%;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   background: var(--bg-gray);
-  padding: 32px 20px;
-  padding-top: calc(var(--sat) + 32px);
-  padding-bottom: calc(var(--sab) + 12vh);
-  gap: 28px;
+  padding: 12px 20px;
+  padding-top: calc(var(--sat) + 8px);
+  padding-bottom: calc(var(--sab) + 16px);
+  gap: 12px;
 }
 
 /* DUK Logo */
 .setup-logo-wrap {
   display: flex;
   justify-content: center;
+  margin-top: 2vh;
+  margin-bottom: 16px;
   animation: floatIn 0.5s var(--ease) both;
 }
 
@@ -2109,11 +2111,11 @@ textarea {
   max-width: 440px;
   background: var(--white);
   border-radius: 24px;
-  padding: 32px 24px;
+  padding: 20px 20px;
   box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
   animation: floatIn 0.45s 0.1s var(--ease) both;
 }
 
@@ -2125,14 +2127,14 @@ textarea {
 }
 
 .setup-card__title {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 800;
   color: var(--black);
   letter-spacing: -0.4px;
 }
 
 .setup-card__subtitle {
-  font-size: 15px;
+  font-size: 14px;
   color: var(--med-gray);
   line-height: 1.5;
 }
@@ -2145,7 +2147,7 @@ textarea {
 }
 
 .setup-label {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--dark-gray);
 }
@@ -2156,7 +2158,7 @@ textarea {
   border: 1.5px solid var(--border-gray);
   border-radius: 14px;
   padding: 15px 18px;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--black);
   background: var(--white);
   outline: none;
@@ -2180,7 +2182,7 @@ textarea {
 }
 
 .setup-error {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--danger);
 }
 
@@ -2299,7 +2301,7 @@ textarea {
 }
 
 .setup-domain-tick {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--mint-dark);
   font-weight: 800;
   flex-shrink: 0;
@@ -2382,7 +2384,7 @@ textarea {
 }
 
 .setup-dropdown-item__desc {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--med-gray);
 }
 

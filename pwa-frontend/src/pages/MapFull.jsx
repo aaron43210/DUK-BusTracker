@@ -5,7 +5,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Crosshair, Plus, Minus, X, Clock, MapPin, Navigation } from 'lucide-react';
+import { Crosshair, Plus, Minus } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import TopBar from '../components/TopBar';

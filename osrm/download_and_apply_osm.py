@@ -14,63 +14,78 @@ PATCHED_FILE = os.path.join(DATA_DIR, "trivandrum_patched.osm")
 PBF_FILE = os.path.join(DATA_DIR, "trivandrum.osm.pbf")
 LIVE_FILE = os.path.join(DATA_DIR, "technopark_live.osm")
 
-BBOX = "76.872,8.554,76.882,8.564"
-OSM_API_URL = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX}"
+# Technopark / Kazhakuttam corridor
+BBOX_TECHNOPARK = "76.872,8.554,76.882,8.564"
+OSM_API_URL_TECHNOPARK = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_TECHNOPARK}"
 
-print("🌐 Fetching live OSM data from OpenStreetMap API...")
-try:
-    req = urllib.request.Request(
-        OSM_API_URL,
-        headers={"User-Agent": "BusTracker-OSRM-Updater/1.0"}
-    )
-    with urllib.request.urlopen(req, timeout=30) as response:
-        live_xml_data = response.read().decode("utf-8")
-        with open(LIVE_FILE, "w", encoding="utf-8") as f:
-            f.write(live_xml_data)
-        print(f"✅ Successfully fetched {len(live_xml_data):,} bytes of live OSM data!")
-except Exception as e:
-    print(f"⚠️ Live download fallback: {e}")
-    if os.path.exists(LIVE_FILE):
-        with open(LIVE_FILE, "r", encoding="utf-8") as f:
-            live_xml_data = f.read()
-    else:
-        live_xml_data = None
+# Nellimoodu / DUK campus corridor
+BBOX_NELLIMOODU = "77.040,8.370,77.060,8.400"
+OSM_API_URL_NELLIMOODU = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_NELLIMOODU}"
 
-if not live_xml_data:
+def fetch_osm(url, label):
+    print(f"🌐 Fetching live OSM data for {label}...")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "BusTracker-OSRM-Updater/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = response.read().decode("utf-8")
+            print(f"✅ {label}: fetched {len(data):,} bytes")
+            return data
+    except Exception as e:
+        print(f"⚠️ {label} fetch failed: {e}")
+        return None
+
+live_xml_data       = fetch_osm(OSM_API_URL_TECHNOPARK, "Technopark corridor")
+nellimoodu_xml_data = fetch_osm(OSM_API_URL_NELLIMOODU, "Nellimoodu corridor")
+
+if not live_xml_data and not nellimoodu_xml_data:
     print("❌ No OSM data available.")
     sys.exit(1)
+if not live_xml_data:
+    live_xml_data = nellimoodu_xml_data
 
 print("🌲 Parsing base OSM and live OSM trees...")
 if not os.path.exists(OSM_FILE):
     os.system(f"/opt/homebrew/bin/osmium cat {PBF_FILE} -o {OSM_FILE} --overwrite")
 
-live_root = ET.fromstring(live_xml_data)
-live_nodes = {n.attrib["id"]: n for n in live_root.findall("node")}
-live_ways = {w.attrib["id"]: w for w in live_root.findall("way")}
-
 base_tree = ET.parse(OSM_FILE)
 base_root = base_tree.getroot()
 
-# Track and replace elements
-replaced_nodes = set()
-replaced_ways = set()
+def merge_live_osm(xml_data, base_root):
+    """Merge live OSM nodes/ways into the base tree, replacing stale entries."""
+    if not xml_data:
+        return
+    root = ET.fromstring(xml_data)
+    live_nodes = {n.attrib["id"]: n for n in root.findall("node")}
+    live_ways  = {w.attrib["id"]: w for w in root.findall("way")}
+    replaced_nodes, replaced_ways = set(), set()
+    for i, child in enumerate(base_root):
+        cid = child.attrib.get("id")
+        if child.tag == "node" and cid in live_nodes:
+            base_root[i] = live_nodes[cid]; replaced_nodes.add(cid)
+        elif child.tag == "way" and cid in live_ways:
+            base_root[i] = live_ways[cid]; replaced_ways.add(cid)
+    for nid, node in live_nodes.items():
+        if nid not in replaced_nodes: base_root.append(node)
+    for wid, way in live_ways.items():
+        if wid not in replaced_ways: base_root.append(way)
+    print(f"   ↳ Merged {len(live_nodes)} nodes, {len(live_ways)} ways")
 
-for i, child in enumerate(base_root):
-    cid = child.attrib.get("id")
-    if child.tag == "node" and cid in live_nodes:
-        base_root[i] = live_nodes[cid]
-        replaced_nodes.add(cid)
-    elif child.tag == "way" and cid in live_ways:
-        base_root[i] = live_ways[cid]
-        replaced_ways.add(cid)
+merge_live_osm(live_xml_data, base_root)
+merge_live_osm(nellimoodu_xml_data, base_root)
 
-for nid, node in live_nodes.items():
-    if nid not in replaced_nodes:
-        base_root.append(node)
-
-for wid, way in live_ways.items():
-    if wid not in replaced_ways:
-        base_root.append(way)
+# Global pass to remove one-way restrictions from all primary, secondary, and tertiary roads.
+# This ensures the bus can travel both ways on major roads regardless of how OSM has tagged them.
+# Trunk/motorway are intentionally left alone — those are real one-way expressways.
+BUS_ROAD_TYPES = {"primary", "primary_link"}
+oneway_fixed = 0
+for way in base_root.findall("way"):
+    tags = {t.attrib.get("k"): t.attrib.get("v") for t in way.findall("tag")}
+    if tags.get("highway") in BUS_ROAD_TYPES and tags.get("oneway") in ("yes", "1", "true", "-1"):
+        for t in way.findall("tag"):
+            if t.attrib.get("k") == "oneway":
+                t.attrib["v"] = "no"
+                oneway_fixed += 1
+print(f"🛣️  Made {oneway_fixed} primary/secondary/tertiary roads two-way!")
 
 # ---------------------------------------------------------------------------
 # AUTOMATIC FLYOVER DECOUPLING:
@@ -101,17 +116,14 @@ for way in base_root.findall("way"):
             lats = [float(all_nodes_dict[r].attrib["lat"]) for r in refs if r in all_nodes_dict]
             lons = [float(all_nodes_dict[r].attrib["lon"]) for r in refs if r in all_nodes_dict]
             if lats and lons:
-                # If within Kazhakuttam - Technopark corridor (lat 8.550 to 8.570, lon 76.870 to 76.885)
-                if min(lats) > 8.550 and max(lats) < 8.570 and min(lons) > 76.870 and max(lons) < 76.885:
-                    # Allow two-way bus transit on ground service roads (remove any one-way restrictions)
-                    has_oneway = False
-                    for t in way.findall("tag"):
-                        if t.attrib.get("k") == "oneway":
-                            t.attrib["v"] = "no"
-                            has_oneway = True
-                    if not has_oneway:
-                        way.append(ET.Element("tag", {"k": "oneway", "v": "no"}))
+                min_lat, max_lat = min(lats), max(lats)
+                min_lon, max_lon = min(lons), max(lons)
 
+                # Bus route corridors where two-way travel must be allowed:
+                in_technopark = (min_lat > 8.550 and max_lat < 8.570 and min_lon > 76.870 and max_lon < 76.885)
+                in_nellimoodu = (min_lat > 8.370 and max_lat < 8.400 and min_lon > 77.040 and max_lon < 77.060)
+
+                if in_technopark or in_nellimoodu:
                     for nd in nds:
                         ref = nd.attrib.get("ref")
                         if ref in trunk_node_ids and ref in all_nodes_dict:

@@ -269,8 +269,6 @@ async def handle_gps_update(
 
         # ── Smart Progression (Visited Stops Detection) ───────────────────
         try:
-            # Distance calc
-            
             # Fetch all stops for this route
             stops_res = await db.execute(
                 select(BusStop).where(BusStop.route_id == trip.route_id)
@@ -299,14 +297,14 @@ async def handle_gps_update(
                 await db.commit()
                 logger.info("[LIFECYCLE] Trip #%d reached stops: %s", trip.id, new_visited)
         except Exception as e:
-            logger.error("[LIFECYCLE] Progression check failed: %s", e)
+            logger.warning("[LIFECYCLE] Progression check failed: %s", e)
 
         # ── Run ETA-based automatic late notification ───────────────────────────────────
         try:
             # ETA alerts
             await check_eta_late_notification(db, trip, lat, lon, dest_lat, dest_lon)
         except Exception as e:
-            logger.debug("[LIFECYCLE] ETA check skipped: %s", e)
+            logger.warning("[LIFECYCLE] ETA check skipped: %s", e)
 
         # ── Run per-user proximity alerts ─────────────────────────────────────────
         try:
@@ -315,7 +313,7 @@ async def handle_gps_update(
             if alerts_sent:
                 logger.info("[LIFECYCLE] Sent %d proximity alerts for trip #%d", alerts_sent, trip.id)
         except Exception as e:
-            logger.debug("[LIFECYCLE] Proximity alerts skipped: %s", e)
+            logger.warning("[LIFECYCLE] Proximity alerts skipped: %s", e)
 
 
 async def auto_complete_expired_trips(db: AsyncSession) -> bool:

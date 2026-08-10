@@ -22,9 +22,11 @@ import {
 } from 'react-router-dom';
 
 import { setToken, clearToken } from './api.js'; // token management from our API module
-import { Settings as SettingsIcon, LogOut, Menu, X, FileText, BusFront, LayoutDashboard } from 'lucide-react';
+
+
 
 import dukLogo from './assets/duk_logo.png';
+import canlabLogo from './assets/canlab.png';
 
 // Import every page component
 import Login from './pages/Login.jsx';
@@ -205,6 +207,13 @@ function DashboardShell({ onLogout }) {
 
         {/* Footer: server status + logout */}
         <div className="sidebar-footer">
+          <div style={{ padding: '0 8px 12px', display: 'flex', justifyContent: 'center' }}>
+            <img
+              src={canlabLogo}
+              alt="CANLab Logo"
+              style={{ width: '100%', maxWidth: '125px', height: 'auto', display: 'block', transform: 'translateX(-12px)' }}
+            />
+          </div>
           {/* Logout button — ghost style, full sidebar width */}
           <button
             className="btn btn-ghost btn-sm"

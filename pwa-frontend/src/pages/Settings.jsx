@@ -4,7 +4,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, MapPin, Bell, Info, Sun, Moon, LogOut } from 'lucide-react';
+import { User, MapPin, Bell, LogOut } from 'lucide-react';
 import TopBar      from '../components/TopBar';
 import DrawerMenu  from '../components/DrawerMenu';
 import { getUser, saveUser, clearSession } from '../storage';
@@ -19,7 +19,6 @@ export default function Settings() {
   const [drawerOpen,    setDrawerOpen]    = useState(false);
   const [user,          setUser]          = useState(null);
   const [stops,         setStops]         = useState(DEFAULT_BUS_STOPS);
-  const [tripType,      setTripType]      = useState('Morning');
   const [notifEnabled,  setNotifEnabled]  = useState(false);
   const [alertEnabled,  setAlertEnabled]  = useState(false);
   const [alertType,     setAlertType]     = useState('time');

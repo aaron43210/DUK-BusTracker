@@ -123,10 +123,7 @@ export async function getEta(stop_id) {
   return apiFetch(`/api/v1/eta?stop_id=${stop_id}`);
 }
 
-/** GPS breadcrumb trail for a specific date (YYYY-MM-DD) */
-export async function getHistoryForDate(dateStr) {
-  return apiFetch(`/api/v1/history/${dateStr}`);
-}
+
 
 /** Road-snapped complete route geometry */
 export async function getRouteGeometry() {
@@ -138,13 +135,7 @@ export async function getRouteSegment(lat1, lon1, lat2, lon2) {
   return apiFetch(`/api/v1/route_segment?lat1=${lat1}&lon1=${lon1}&lat2=${lat2}&lon2=${lon2}`);
 }
 
-/** Snap arbitrary GPS points to road coordinates via OSRM */
-export async function snapRoute(points) {
-  return apiFetch('/api/v1/snap_route', {
-    method: 'POST',
-    body: JSON.stringify({ points }),
-  });
-}
+
 
 /** Complete historical snapped route trace for a specific trip ID */
 export async function getTripTrace(tripId) {

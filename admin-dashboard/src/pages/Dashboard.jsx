@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getLatestGps, getTripState, getStops, getRouteGeometry, getRouteSegment, getTripTrace } from '../api.js';
 import { useToast } from '../App.jsx';
+import { loadMapLibre, haversineDistKm } from '../utils.js';
 import busSvgRaw from '../assets/bus.svg?raw';
 
 function statusBadge(status) {
@@ -18,28 +19,6 @@ function statusBadge(status) {
   return <span className={`badge ${s.cls}`}>{s.label}</span>;
 }
 
-function loadMapLibre(callback) {
-  if (window.maplibregl) { callback(); return; }
-
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
-  document.head.appendChild(link);
-
-  const script = document.createElement('script');
-  script.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
-  script.onload = callback;
-  document.head.appendChild(script);
-}
-
-// Distance in km between two lon/lat points
-function haversineDistKm(lon1, lat1, lon2, lat2) {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 class CenterBusControl {
   onAdd(map) {
@@ -228,7 +207,10 @@ export default function Dashboard() {
   const currentPosRef = useRef(null);
   const isAutoCenterRef = useRef(true);
   const lastPingTimeRef = useRef(performance.now());
-  const pingGapRef = useRef(2000); // Start assuming a 2-second ping gap
+  const pingGapRef = useRef(7000); // Start assuming a 7-second hardware ping gap
+  const lastPolylineRef = useRef(null);  // Phase 3: cached OSRM segment
+  const lastHeadingRef = useRef(null);   // Phase 3: heading of last cached segment
+  const lastSpeedRef = useRef(0);        // Phase 4: last known speed km/h
 
   useEffect(() => {
     isAutoCenterRef.current = autoCenter;
@@ -297,12 +279,47 @@ export default function Dashboard() {
     }
 
     let polyline = [[startLon, startLat], [targetLon, targetLat]];
-    try {
-      const seg = await getRouteSegment(startLat, startLon, targetLat, targetLon);
-      if (seg?.coordinates?.length >= 2) {
-        polyline = seg.coordinates;
+
+    // Phase 4: Dead-reckoning — project target forward by 3s at current speed
+    // so the marker visually stays aligned with the real bus position.
+    const speed_ms = (lastSpeedRef.current || 0) / 3.6; // km/h → m/s
+    let predictedTargetLon = targetLon;
+    let predictedTargetLat = targetLat;
+    if (speed_ms > 1.0 && currentPosRef.current) {
+      // Bearing from prev position to this ping
+      const dLon = targetLon - startLon;
+      const dLat = targetLat - startLat;
+      const mag = Math.sqrt(dLon * dLon + dLat * dLat);
+      if (mag > 0.000001) {
+        const lookAheadSec = Math.min(3, (pingGapRef.current / 1000) * 0.4);
+        const lookAheadDeg = (speed_ms * lookAheadSec) / 111_320; // metres → degrees
+        predictedTargetLon = targetLon + (dLon / mag) * lookAheadDeg;
+        predictedTargetLat = targetLat + (dLat / mag) * lookAheadDeg;
       }
-    } catch (_) { }
+    }
+
+    // Phase 3: Compute heading of current segment
+    const dLonH = predictedTargetLon - startLon;
+    const dLatH = predictedTargetLat - startLat;
+    const newHeading = Math.atan2(dLonH, dLatH) * (180 / Math.PI);
+
+    // Reuse cached polyline if heading hasn't changed by more than 30°
+    const headingChanged = lastHeadingRef.current === null ||
+      Math.abs(((newHeading - lastHeadingRef.current + 540) % 360) - 180) > 30;
+
+    if (!headingChanged && lastPolylineRef.current) {
+      // Heading is consistent — reuse cached road segment, skip OSRM call
+      polyline = lastPolylineRef.current;
+    } else {
+      try {
+        const seg = await getRouteSegment(startLat, startLon, predictedTargetLat, predictedTargetLon);
+        if (seg?.coordinates?.length >= 2) {
+          polyline = seg.coordinates;
+          lastPolylineRef.current = polyline;
+          lastHeadingRef.current = newHeading;
+        }
+      } catch (_) { }
+    }
 
     const cumDists = [0];
     for (let i = 1; i < polyline.length; i++) {
@@ -316,8 +333,9 @@ export default function Dashboard() {
       return;
     }
 
-    // Match animation duration to the 1.5s live polling interval for seamless gliding
-    const duration = Math.min(Math.max(pingGapRef.current || 1500, 1000), 2500);
+    // Animation duration matches the full measured ping gap so the marker glides
+    // continuously between hardware pings (7-9 sec) instead of stopping after 2.5s.
+    const duration = Math.min(Math.max(pingGapRef.current || 7000, 3000), 10000);
     const startTime = performance.now();
     let appendedIdx = 0;
     let lastTrailRender = 0;
@@ -348,17 +366,6 @@ export default function Dashboard() {
       currentPosRef.current = [curLon, curLat];
       markerRef.current.setLngLat([curLon, curLat]);
 
-      // Calculate bearing angle to rotate bus icon in heading direction (DISABLED per user request to keep marker stable)
-      // const dLon = p2[0] - p1[0];
-      // const dLat = p2[1] - p1[1];
-      // if (Math.abs(dLon) > 0.000001 || Math.abs(dLat) > 0.000001) {
-      //   const rad = Math.atan2(dLon * Math.cos(curLat * Math.PI / 180), dLat);
-      //   const deg = (rad * 180 / Math.PI + 360) % 360;
-      //   const busDot = document.getElementById('bus-dot');
-      //   if (busDot) {
-      //     busDot.style.transform = `rotate(${deg.toFixed(1)}deg)`;
-      //   }
-      // }
 
       // Smooth 60 FPS camera lockstep: jumpTo eliminates all camera timer fights & stutter!
       if (mapRef.current && isAutoCenterRef.current) {
@@ -483,6 +490,8 @@ export default function Dashboard() {
     ws.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // Raw GPS ping — arrives immediately, triggers main animation
         if (data.type === 'gps' && data.lat && data.lon) {
           const now = performance.now();
           const gap = now - lastPingTimeRef.current;
@@ -494,11 +503,21 @@ export default function Dashboard() {
 
           setGps(prev => ({ ...prev, lat: data.lat, lon: data.lon, speed_kmh: data.speed_kmh, server_time: data.server_time, is_live: true }));
 
+          lastSpeedRef.current = data.speed_kmh || 0;
           animateBusTo(data.lat, data.lon);
 
           const busDot = document.getElementById('bus-dot');
           if (busDot) {
             busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', '#16a34a'));
+          }
+        }
+
+        // OSRM snap correction — arrives ~200ms later, nudges marker to road
+        if (data.type === 'gps_snap' && data.lat && data.lon) {
+          // Gently update current position to road-snapped coord without restarting animation
+          currentPosRef.current = [data.lon, data.lat];
+          if (markerRef.current) {
+            markerRef.current.setLngLat([data.lon, data.lat]);
           }
         }
       } catch (_) { }
@@ -518,7 +537,7 @@ export default function Dashboard() {
     const lat = gps?.lat ?? 8.5350;
     const lon = gps?.lon ?? 76.9908;
     const isLive = gps?.is_live === true;
-    loadMapLibre(() => {
+    loadMapLibre().then(() => {
       setTimeout(() => {
         const isScheduled = isScheduledTrip(tripState?.trip);
         buildMapLive('admin-map', lat, lon, isLive, stops, mapRef, markerRef, isScheduled, tripState?.trip_id, trailCoordsRef);

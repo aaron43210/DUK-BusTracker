@@ -6,10 +6,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Expand } from 'lucide-react';
-import TopBar             from '../components/TopBar';
-import DrawerMenu         from '../components/DrawerMenu';
+import TopBar from '../components/TopBar';
+import DrawerMenu from '../components/DrawerMenu';
 import NotificationDrawer from '../components/NotificationDrawer';
-import BusMapView         from '../components/BusMapView';
+import BusMapView from '../components/BusMapView';
 import {
   getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment,
 } from '../api';
@@ -25,24 +25,24 @@ const POLL_MS = 2500;
 export default function RouteView() {
   const navigate = useNavigate();
 
-  const [drawerOpen,       setDrawerOpen]       = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
-  const [user,             setUser]             = useState(null);
-  const [tripState,     setTripState]     = useState(null);
-  const [busPosition,   setBusPosition]   = useState(null);
-  const [routeHistory,  setRouteHistory]  = useState(null);
-  const [eta,           setEta]           = useState(null);
-  const [stops,         setStops]         = useState([]);
+  const [user, setUser] = useState(null);
+  const [tripState, setTripState] = useState(null);
+  const [busPosition, setBusPosition] = useState(null);
+  const [routeHistory, setRouteHistory] = useState(null);
+  const [eta, setEta] = useState(null);
+  const [stops, setStops] = useState([]);
   const [plannedCoords, setPlannedCoords] = useState([]);
-  const [trailCoords,   setTrailCoords]   = useState([]);
-  const [animatedBus,   setAnimatedBus]   = useState(null);
-  const [loading,       setLoading]       = useState(true);
-  const [refreshing,    setRefreshing]    = useState(false);
-  const [error,         setError]         = useState('');
+  const [trailCoords, setTrailCoords] = useState([]);
+  const [animatedBus, setAnimatedBus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
 
-  const intervalRef    = useRef(null);
+  const intervalRef = useRef(null);
   const animIntervalRef = useRef(null);
-  const currentPosRef  = useRef(null);
+  const currentPosRef = useRef(null);
 
   // Load user
   useEffect(() => {
@@ -70,7 +70,7 @@ export default function RouteView() {
     try {
       const seg = await getRouteSegment(startLat, startLon, targetLat, targetLon);
       if (seg?.coordinates?.length > 1) polyline = seg.coordinates;
-    } catch (_) {}
+    } catch (_) { }
 
     // Calculate cumulative distances for smooth interpolation
     const cumDists = [0];
@@ -86,7 +86,7 @@ export default function RouteView() {
     }
 
     if (animIntervalRef.current) cancelAnimationFrame(animIntervalRef.current);
-    
+
     const duration = POLL_MS;
     const startTime = performance.now();
 
@@ -119,7 +119,7 @@ export default function RouteView() {
         currentPosRef.current = finalPoint;
       }
     };
-    
+
     animIntervalRef.current = requestAnimationFrame(step);
   }, []);
 
@@ -134,9 +134,9 @@ export default function RouteView() {
         getRouteHistory(),
       ]);
 
-      const trip    = tripRes.status === 'fulfilled'    ? tripRes.value    : null;
-      const bus     = busRes.status === 'fulfilled'     ? busRes.value     : null;
-      const history = histRes.status === 'fulfilled'    ? histRes.value    : null;
+      const trip = tripRes.status === 'fulfilled' ? tripRes.value : null;
+      const bus = busRes.status === 'fulfilled' ? busRes.value : null;
+      const history = histRes.status === 'fulfilled' ? histRes.value : null;
 
       setTripState(trip);
       setBusPosition(bus);
@@ -157,7 +157,7 @@ export default function RouteView() {
         try {
           const etaRes = await getEta(boardingStopId);
           setEta(etaRes);
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Planned route geometry (only once)
@@ -165,7 +165,7 @@ export default function RouteView() {
         try {
           const geo = await getRouteGeometry();
           if (geo?.coordinates?.length) setPlannedCoords(geo.coordinates);
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Trail from route history
@@ -195,15 +195,15 @@ export default function RouteView() {
   const direction = tripState?.trip?.direction || (new Date().getHours() >= 14 ? 'reverse' : 'forward');
   const schedule = direction === 'forward' ? MORNING_SCHEDULE : EVENING_SCHEDULE;
   const lateMins = tripState?.trip?.late_by_minutes ?? null;
-  
+
   const tripStatus = tripState?.status ?? 'idle'; // 'active' | 'idle' | 'waiting' | 'cancelled'
-  const isActive   = tripStatus === 'active';
-  const busIsLive  = busPosition?.is_live === true;
-  const isOnline   = isActive;
+  const isActive = tripStatus === 'active';
+  const busIsLive = busPosition?.is_live === true;
+  const isOnline = isActive;
 
   // Build timeline from stops + visit history
-  const visitedStops  = routeHistory?.visitedStops  || {};
-  const arrivalTimes  = routeHistory?.arrivalTimes  || {};
+  const visitedStops = routeHistory?.visitedStops || {};
+  const arrivalTimes = routeHistory?.arrivalTimes || {};
 
   const stopsToShow = stops.length ? stops : Object.keys(schedule).map((name, i) => ({
     id: i + 1, name, lat: null, lon: null, order_index: i,
@@ -211,7 +211,7 @@ export default function RouteView() {
 
   // Find "current next stop" = first unvisited stop
   const currentNextIdx = stopsToShow.findIndex(s => !visitedStops[s.name]);
-  const visitedCount   = Object.keys(visitedStops).length;
+  const visitedCount = Object.keys(visitedStops).length;
 
   // Viewport for mini-map
   const mapVp = getMapViewport(stops, animatedBus);
@@ -223,7 +223,7 @@ export default function RouteView() {
   const etaText = eta?.eta_minutes != null ? `${Math.round(eta.eta_minutes)} min` : '—';
   const speedText = busPosition?.speed != null ? `${Math.round(busPosition.speed)} km/h` : '—';
   const stopsDoneText = `${visitedCount}/${stopsToShow.length}`;
-  
+
   // Format last updated time
   const formatLastUpdated = (isoStr) => {
     if (!isoStr) return '';
@@ -340,7 +340,7 @@ export default function RouteView() {
           <div className="ios-header-row">
             <div className="ios-screen-title">Route View</div>
           </div>
-          
+
           <div className="ios-trip-subtext">
             {getSubtextStatus()}
           </div>
@@ -372,22 +372,22 @@ export default function RouteView() {
             ) : (
               <div className="ios-timeline">
                 {stopsToShow.map((stop, idx) => {
-                  const isVisited  = !!visitedStops[stop.name];
-                  const isCurrent  = idx === currentNextIdx;
-                  const scheduled  = schedule[stop.name] || '';
+                  const isVisited = !!visitedStops[stop.name];
+                  const isCurrent = idx === currentNextIdx;
+                  const scheduled = schedule[stop.name] || '';
                   const actualTime = arrivalTimes[stop.name] || null;
                   const displayTime = isVisited
                     ? actualTime || scheduled
                     : lateMins != null
                       ? computeEstimatedTime(scheduled, lateMins) || scheduled
                       : scheduled;
-                  
+
                   const isLast = idx === stopsToShow.length - 1;
-                  
+
                   // Compute delay state
                   let delayType = 'none';
                   let statusSubtext = 'Scheduled';
-                  
+
                   if (isVisited) {
                     statusSubtext = 'Arrived';
                     if (lateMins > 1) delayType = 'late';
@@ -396,7 +396,7 @@ export default function RouteView() {
                     if (lateMins > 1) delayType = 'late';
                     else if (lateMins < -1) delayType = 'ahead';
                     else delayType = 'ontime';
-                    
+
                     if (isCurrent) {
                       statusSubtext = eta?.eta_minutes != null ? `Approaching • ETA ${Math.round(eta.eta_minutes)} min` : 'Next Stop';
                     } else {
@@ -459,8 +459,8 @@ export default function RouteView() {
               </div>
             )}
           </div>
-          
-          <div className="ios-map-card" onClick={() => navigate('/map')}>
+
+          <div className="ios-map-card" onClick={() => navigate('/map')} style={{ height: '800px', marginBottom: '-30px' }}>
             <BusMapView
               interactive={false}
               center={mapVp.center}
@@ -476,8 +476,8 @@ export default function RouteView() {
               <div className="ios-tap-pill">Tap to view full map</div>
             </div>
           </div>
-          
-          <div style={{ height: 40 }} />
+
+          <div style={{ height: 20 }} />
         </div>
       </div>
     </>

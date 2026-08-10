@@ -1,8 +1,9 @@
 // src/pages/RouteHistory.jsx
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { getRouteHistory, snapRoute } from "../api.js";
+import { getRouteHistory } from "../api.js";
 import { useToast } from "../App.jsx";
-import { Search, Bus, MapPin, Play, Pause, RotateCcw, Clock } from "lucide-react";
+import { loadMapLibre, todayStr } from "../utils.js";
+import { Search, MapPin, Play, Pause, RotateCcw, Clock } from "lucide-react";
 
 // Premium Custom Time Picker Component
 function PremiumTimePicker({ value, onChange }) {
@@ -75,35 +76,9 @@ function PremiumTimePicker({ value, onChange }) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// MapLibre GL asset URLs + lazy loader
-// ---------------------------------------------------------------------------
-const MAPLIBRE_CSS = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css";
-const MAPLIBRE_JS = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js";
+
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
-function loadMapLibre() {
-    return new Promise((resolve) => {
-        if (window.maplibregl) {
-            resolve(window.maplibregl);
-            return;
-        }
-        if (!document.querySelector('link[href="' + MAPLIBRE_CSS + '"]')) {
-            const link = document.createElement("link");
-            link.rel = "stylesheet";
-            link.href = MAPLIBRE_CSS;
-            document.head.appendChild(link);
-        }
-        const script = document.createElement("script");
-        script.src = MAPLIBRE_JS;
-        script.onload = () => resolve(window.maplibregl);
-        document.head.appendChild(script);
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Bus marker icon (inline SVG)
-// ---------------------------------------------------------------------------
 const BUS_SVG_RAW =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">' +
     '<rect x="3" y="7" width="34" height="22" rx="6" fill="#6366f1" stroke="white" stroke-width="2"/>' +
@@ -120,9 +95,7 @@ function createBusEl() {
     return el;
 }
 
-function todayStr() {
-    return new Date().toISOString().split("T")[0];
-}
+
 
 export default function RouteHistory() {
     const showToast = useToast();
@@ -135,6 +108,7 @@ export default function RouteHistory() {
     // --- Search results ---
     const [session, setSession] = useState(null); // Just one session now!
     const [loading, setLoading] = useState(false);
+    const [hasSearched, setHasSearched] = useState(false); // true only after user clicks Search
 
     // --- Selection + playback state ---
     const [playing, setPlaying] = useState(false);
@@ -188,6 +162,7 @@ export default function RouteHistory() {
             return;
         }
         setLoading(true);
+        setHasSearched(true);
         stopPb();
         setSession(null);
         try {
@@ -231,11 +206,7 @@ export default function RouteHistory() {
         }
     }
 
-    // Initial search on mount
-    useEffect(() => {
-        search();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+
 
     const drawSess = useCallback((s) => {
         const map = mapRef.current;
@@ -547,7 +518,7 @@ export default function RouteHistory() {
                         background: "#e8ecf0",
                     }}
                 >
-                    {!session && (
+                    {!session && hasSearched && !loading && (
                         <div
                             style={{
                                 position: "absolute",

@@ -11,8 +11,8 @@ from database import get_db
 from models.gps import GpsLog
 from models.route import BusStop, Route
 from models.trip import Trip
-from services.geofence import haversine_km, find_nearest_stop_math, get_stops_ahead
-from services.osrm_client import get_osrm_route_geometry, get_osrm_segment_geometry
+from services.geofence import haversine_km, find_nearest_stop_math, get_stops_ahead, cluster_gps_points
+from services.osrm_client import get_osrm_route_geometry, get_osrm_segment_geometry, get_osrm_match_geometry, snap_live_gps, haversine_m_math
 from services.eta_engine import predict_eta
 from services.trip_lifecycle import auto_complete_expired_trips
 from constants import (
@@ -56,6 +56,10 @@ async def _get_all_stops(db: AsyncSession) -> list[dict]:
 
 
 # ── Stateful filter for direct-to-supabase architectures ──
+# Module-level stationary lock for the /latest endpoint.
+# NOTE: Resets to None on every uvicorn --reload. This is acceptable — the
+# marker will momentarily snap back to raw GPS on reload, then re-lock within
+# the next 1-2 pings. A DB/Redis-backed value would be more robust in production.
 LAST_LOCKED_POS = None
 
 @router.get("/latest")
@@ -86,7 +90,6 @@ async def get_latest(db: AsyncSession = Depends(get_db)):
         if LAST_LOCKED_POS is None:
             LAST_LOCKED_POS = {"lat": lat, "lon": lon}
         else:
-            from services.osrm_client import haversine_m_math
             dist_m = haversine_m_math(LAST_LOCKED_POS["lat"], LAST_LOCKED_POS["lon"], lat, lon)
             if dist_m < 25.0:
                 lat = LAST_LOCKED_POS["lat"]
@@ -96,7 +99,6 @@ async def get_latest(db: AsyncSession = Depends(get_db)):
     else:
         LAST_LOCKED_POS = {"lat": lat, "lon": lon}
 
-    from services.osrm_client import snap_live_gps
     snapped_lat, snapped_lon = await snap_live_gps(lat, lon)
 
     return {
@@ -415,7 +417,6 @@ async def snap_route(payload: dict):
         elif isinstance(p, dict) and "lat" in p and "lon" in p:
             waypoints.append((float(p["lat"]), float(p["lon"])))
 
-    from services.osrm_client import get_osrm_match_geometry
     coords = await get_osrm_match_geometry(waypoints)
     return {"coordinates": coords}
 
@@ -427,8 +428,8 @@ async def get_eta(
     stop_id: int = Query(..., description="Target bus stop ID"),
     db:      AsyncSession = Depends(get_db),
 ):
-    from services.trip_lifecycle import get_active_trip, to_ist
     """LightGBM ETA prediction to the target stop from current bus position."""
+    from services.trip_lifecycle import get_active_trip, to_ist
     # Get latest bus position
     result = await db.execute(
         select(GpsLog)
@@ -489,9 +490,9 @@ async def get_eta(
         ETA_CACHE[stop_id] = (latest.id, response)
         return response
 
-    stops_remaining = len([s for s in ahead if s["id"] == stop_id or s["order_index"] <= stop.order_index])
+    stops_remaining = len([s for s in ahead if s["order_index"] <= stop.order_index])
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     prediction = await predict_eta(
         bus_lat=latest.lat,
         bus_lon=latest.lon,
@@ -586,22 +587,15 @@ async def get_trip_trace(trip_id: int, db: AsyncSession = Depends(get_db)):
     if not logs:
         return {"coordinates": []}
         
-    filtered_waypoints = []
-    last_lat, last_lon = None, None
-    for log in logs:
-        lat, lon = log.lat, log.lon
-        if last_lat is None:
-            filtered_waypoints.append((lat, lon))
-            last_lat, last_lon = lat, lon
-        else:
-            # Downsample: only include points > 10m apart to avoid OSRM bloat
-            if haversine_km(last_lat, last_lon, lat, lon) > 0.01:
-                filtered_waypoints.append((lat, lon))
-                last_lat, last_lon = lat, lon
+    # ── Stationary Cluster Filter ──
+    # Collapse slow indoor GPS drift into single centroid points so OSRM
+    # doesn't route through fake side-road detours.
+    raw_tuples = [(log.lat, log.lon) for log in logs]
+    filtered_waypoints = cluster_gps_points(raw_tuples, radius_km=0.030)
 
     if len(filtered_waypoints) < 2:
         return {"coordinates": [[w[1], w[0]] for w in filtered_waypoints]}
-        
-    from services.osrm_client import get_osrm_route_geometry
-    coords = await get_osrm_route_geometry(filtered_waypoints)
+
+    # Use OSRM map matching for smooth road-following curves
+    coords = await get_osrm_match_geometry(filtered_waypoints)
     return {"coordinates": coords}

@@ -5,9 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import React, { useState } from 'react';
-// Only useState needed — no data to fetch on mount for this page
 import { Link } from 'react-router-dom';
-
 import { sendBroadcast } from '../api.js'; // POST /admin/api/broadcast
 import { useToast } from '../App.jsx';
 

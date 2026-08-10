@@ -98,18 +98,7 @@ async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destination
     return [haversine_m_math(src_lat, src_lon, d_lat, d_lon) for (d_lat, d_lon) in destinations]
 
 
-def get_osrm_distance_m_sync(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}&continue_straight=false&overview=false"
-    try:
-        with httpx.Client(trust_env=False, timeout=2.0) as client:
-            resp = client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == "Ok" and data.get("routes"):
-                    return float(data["routes"][0]["distance"])
-    except Exception:
-        pass
-    return haversine_m_math(lat1, lon1, lat2, lon2)
+
 
 
 async def get_osrm_segment_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> List[List[float]]:

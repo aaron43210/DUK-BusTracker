@@ -233,8 +233,6 @@ body {
 /* Sidebar footer */
 .sidebar-footer {
   padding-top: 16px;
-  border-top: 1px solid var(--border);
-  /* separator above the footer           */
   margin-top: auto;
   /* push footer to the bottom of the sidebar               */
   display: flex;

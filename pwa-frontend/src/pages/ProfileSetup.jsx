@@ -12,18 +12,18 @@ import { useToast } from '../App';
 import OtpModal from '../components/OtpModal';
 
 export default function ProfileSetup() {
-  const navigate  = useNavigate();
+  const navigate = useNavigate();
   const showToast = useToast();
 
-  const [name,         setName]         = useState('');
-  const [emailPrefix,  setEmailPrefix]  = useState('');
-  const [domain,       setDomain]       = useState(EMAIL_DOMAINS[0]);
-  const [stops,        setStops]        = useState(DEFAULT_BUS_STOPS);
+  const [name, setName] = useState('');
+  const [emailPrefix, setEmailPrefix] = useState('');
+  const [domain, setDomain] = useState(EMAIL_DOMAINS[0]);
+  const [stops, setStops] = useState(DEFAULT_BUS_STOPS);
   const [selectedStop, setSelectedStop] = useState(null);
-  const [dropOpen,     setDropOpen]     = useState(false);
-  const [submitting,   setSubmitting]   = useState(false);
-  const [otpOpen,      setOtpOpen]      = useState(false);
-  const dropRef       = useRef(null);
+  const [dropOpen, setDropOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [otpOpen, setOtpOpen] = useState(false);
+  const dropRef = useRef(null);
   const domainDropRef = useRef(null);
   const [domainDropOpen, setDomainDropOpen] = useState(false);
 
@@ -31,7 +31,7 @@ export default function ProfileSetup() {
   useEffect(() => {
     getStops()
       .then(data => { if (Array.isArray(data) && data.length) setStops(data); })
-      .catch(() => {}); // silently fall back to defaults
+      .catch(() => { }); // silently fall back to defaults
   }, []);
 
   // Close both dropdowns on outside click
@@ -45,11 +45,11 @@ export default function ProfileSetup() {
   }, []);
 
   // Validation
-  const nameOk   = name.trim().length > 0;
+  const nameOk = name.trim().length > 0;
   const prefixOk = emailPrefix.trim().length > 0 && !/[^a-zA-Z0-9._-]/.test(emailPrefix.trim());
   const emailErr = emailPrefix.length > 0 && !prefixOk;
-  const stopOk   = selectedStop !== null;
-  const formOk   = nameOk && prefixOk && stopOk;
+  const stopOk = selectedStop !== null;
+  const formOk = nameOk && prefixOk && stopOk;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -128,7 +128,7 @@ export default function ProfileSetup() {
               >
                 <span>{domain}</span>
                 <span className="setup-domain-chevron">
-                  {domainDropOpen ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
+                  {domainDropOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </span>
               </button>
 
@@ -170,7 +170,7 @@ export default function ProfileSetup() {
                 : <span className="setup-placeholder">Select your boarding stop</span>
               }
               <span className="setup-dropdown-chevron">
-                {dropOpen ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                {dropOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </span>
             </button>
 
@@ -207,6 +207,12 @@ export default function ProfileSetup() {
         </button>
 
       </form>
+
+      {/* Developed by CAN Lab */}
+      <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', opacity: 0.7 }}>
+        <span style={{ fontSize: '10px', fontWeight: '700', color: 'var(--med-gray)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Developed by</span>
+        <img src="/canlab.png" alt="CAN Lab" style={{ height: '65px', objectFit: 'contain' }} />
+      </div>
 
       {/* OTP bottom-sheet modal */}
       <OtpModal

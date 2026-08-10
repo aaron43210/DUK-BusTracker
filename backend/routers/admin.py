@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, update, func
+from sqlalchemy import select, desc, and_, func
 from typing import List, Optional, Literal
 
 from database import get_db
@@ -18,7 +18,7 @@ from models.trip import Trip
 from models.gps import GpsLog
 from models.notification import AdminBroadcast, Suggestion, ScheduledNotification
 from services.firebase import broadcast_to_all_users
-from services.geofence import haversine_km
+from services.geofence import haversine_km, cluster_gps_points
 from services.trip_lifecycle import auto_complete_expired_trips
 from routers.tracking import clear_stops_cache
 from config import get_settings
@@ -156,12 +156,12 @@ async def ensure_today_trips(
     db:    AsyncSession = Depends(get_db),
     _auth: None = Depends(require_admin),
 ):
-    await auto_complete_expired_trips(db)
     """
     Auto-provision today's Morning and Evening trips if today is a weekday (Mon–Fri).
     Returns the list of today's trips (newly created or already existing).
     If today is Saturday or Sunday, returns an empty list without creating anything.
     """
+    await auto_complete_expired_trips(db)
     async with ensure_trips_lock:
         today = date.today()
         created = False
@@ -636,13 +636,10 @@ async def _apply_map_matching(
     if len(raw_points) < 2:
         return raw_points
 
-    # Pre-filter: skip micro-jitter (< 8m) while moving
-    filtered_points = [raw_points[0]]
-    for pt in raw_points[1:]:
-        last_pt = filtered_points[-1]
-        dist_m = haversine_km(last_pt["lat"], last_pt["lon"], pt["lat"], pt["lon"]) * 1000.0
-        if dist_m >= 8.0:
-            filtered_points.append(pt)
+    # ── Stationary Cluster Filter ──
+    # Collapse slow indoor GPS drift into single centroid points so OSRM
+    # doesn't route through fake side-street detours.
+    filtered_points = cluster_gps_points(raw_points, radius_km=0.030, key_lat="lat", key_lon="lon")
 
     if len(filtered_points) < 2:
         return raw_points
