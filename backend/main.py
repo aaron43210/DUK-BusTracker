@@ -86,25 +86,34 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    # Specific origins for local dev; add your production domain here when deploying
     allow_origins=[
-        "http://localhost:5173",   # Vite admin dashboard (dev)
-        "http://localhost:3000",   # React alt port (dev)
+        "http://localhost:5173",
+        "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        "http://localhost:5174",   # PWA dev server (dev)
+        "http://localhost:5174",
         "http://127.0.0.1:5174",
-        "https://legendary-gaufre-1dc00c.netlify.app", # production domain
+        "https://legendary-gaufre-1dc00c.netlify.app",
     ],
-    # All Vercel and Netlify preview/production deployments
     allow_origin_regex=r"https://.*\.(vercel|netlify)\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
+async def log_cors_requests(request: Request, call_next):
+    origin = request.headers.get("origin")
+    method = request.method
+    path = request.url.path
+    if method == "OPTIONS":
+        logger.info(f"[CORS-DEBUG] OPTIONS {path} | Origin: {origin}")
+    return await call_next(request)
+
+app.add_middleware(BaseHTTPMiddleware, dispatch=log_cors_requests)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
