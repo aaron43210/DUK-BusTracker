@@ -5,6 +5,7 @@ Only sends to @duk.ac.in addresses.
 import smtplib
 import secrets
 import logging
+import socket
 import email.utils
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
@@ -101,7 +102,17 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
     # Always log OTP so dev can verify even if email delivery fails
     logger.info("[OTP] Code for %s: %s", to_email, otp)
 
+    # ── IPv6 Docker Fix ────────────────────────────────────────────────────────
+    # Railway containers often lack IPv6 routing, but smtp.gmail.com resolves
+    # to both IPv4 and IPv6. If smtplib tries IPv6 first, it crashes with Errno 101.
+    # We temporarily patch getaddrinfo to force IPv4 (socket.AF_INET).
+    original_getaddrinfo = socket.getaddrinfo
+    def ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
     try:
+        socket.getaddrinfo = ipv4_getaddrinfo
+
         if settings.SMTP_PORT == 465:
             with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
@@ -114,7 +125,9 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
                 server.sendmail(envelope_sender, [to_email], msg.as_string())
         logger.info("[EMAIL] OTP sent to %s", to_email)
         return True
-    except Exception as exc:
-        logger.exception("[EMAIL] Failed to send OTP to %s: %s", to_email, exc)
-        return False
 
+    except Exception as e:
+        logger.error("[EMAIL] Failed to send OTP to %s: %s", to_email, e)
+        return False
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
