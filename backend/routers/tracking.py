@@ -55,9 +55,13 @@ async def _get_all_stops(db: AsyncSession) -> list[dict]:
     return _STOPS_CACHE
 
 
+# ── Stateful filter for direct-to-supabase architectures ──
+LAST_LOCKED_POS = None
+
 @router.get("/latest")
 async def get_latest(db: AsyncSession = Depends(get_db)):
     """Latest GPS ping from the bus."""
+    global LAST_LOCKED_POS
     await auto_complete_expired_trips(db)
     result = await db.execute(
         select(GpsLog)
@@ -75,9 +79,29 @@ async def get_latest(db: AsyncSession = Depends(get_db)):
         log_time = log_time.replace(tzinfo=timezone.utc)
     is_live = (now_utc - log_time).total_seconds() <= 60
 
+    lat, lon = log.lat, log.lon
+
+    # Stationary jitter lock (since Arduino bypasses backend and inserts direct to Supabase)
+    if log.speed is not None and log.speed < 5.0:
+        if LAST_LOCKED_POS is None:
+            LAST_LOCKED_POS = {"lat": lat, "lon": lon}
+        else:
+            from services.osrm_client import haversine_m_math
+            dist_m = haversine_m_math(LAST_LOCKED_POS["lat"], LAST_LOCKED_POS["lon"], lat, lon)
+            if dist_m < 25.0:
+                lat = LAST_LOCKED_POS["lat"]
+                lon = LAST_LOCKED_POS["lon"]
+            else:
+                LAST_LOCKED_POS = {"lat": lat, "lon": lon}
+    else:
+        LAST_LOCKED_POS = {"lat": lat, "lon": lon}
+
+    from services.osrm_client import snap_live_gps
+    snapped_lat, snapped_lon = await snap_live_gps(lat, lon)
+
     return {
-        "lat":         log.lat,
-        "lon":         log.lon,
+        "lat":         snapped_lat,
+        "lon":         snapped_lon,
         "speed_kmh":   log.speed,
         "server_time": log.ist_time.isoformat() if log.ist_time else log.server_time.isoformat() if log.server_time else None,
         "is_live":     is_live,

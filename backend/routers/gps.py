@@ -109,6 +109,23 @@ async def process_raw_payload(raw: str, db: AsyncSession, server_now: datetime) 
     )
     gps_time = datetime.fromisoformat(gps_time_str)
 
+    # ── Stationary Drift Filter ───────────────────────────────────────────────
+    from sqlalchemy.future import select
+    from sqlalchemy import desc
+    from services.osrm_client import haversine_m_math
+
+    prev_res = await db.execute(
+        select(GpsLog).where(GpsLog.lat.isnot(None)).order_by(desc(GpsLog.id)).limit(1)
+    )
+    prev = prev_res.scalar_one_or_none()
+
+    if prev and prev.lat and prev.lon and speed_kmh is not None and speed_kmh < 5.0:
+        dist_m = haversine_m_math(prev.lat, prev.lon, lat, lon)
+        if dist_m < 25.0:  # If moved < 25m and speed is low (< 5.0 km/h), ignore jitter!
+            lat = prev.lat
+            lon = prev.lon
+    # ──────────────────────────────────────────────────────────────────────────
+
     log = GpsLog(server_time=server_now, gps_time=gps_time, lat=lat, lon=lon, speed=speed_kmh)
     db.add(log)
 
@@ -117,15 +134,18 @@ async def process_raw_payload(raw: str, db: AsyncSession, server_now: datetime) 
 
     await db.commit()
 
+    from services.osrm_client import snap_live_gps
+    snapped_lat, snapped_lon = await snap_live_gps(lat, lon)
+
     await manager.broadcast({
         "type":        "gps",
-        "lat":         lat,
-        "lon":         lon,
+        "lat":         snapped_lat,
+        "lon":         snapped_lon,
         "speed_kmh":   speed_kmh,
         "server_time": server_now.isoformat(),
     })
     logger.debug("[GPS] Logged: %.5f, %.5f  speed=%.1f kmh", lat, lon, speed_kmh or 0)
-    return {"type": "gps", "lat": lat, "lon": lon}
+    return {"type": "gps", "lat": snapped_lat, "lon": snapped_lon}
 
 
 # ── Mobile app subscription (subscribe-only) ──────────────────────────────────

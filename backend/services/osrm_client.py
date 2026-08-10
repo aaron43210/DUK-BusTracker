@@ -31,6 +31,22 @@ def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
 OSRM_LIVE_SNAP_RADIUS_M = 40   # 40m snap radius: allows bus bays and campus stops to snap cleanly to the road network
 
 
+async def snap_live_gps(lat: float, lon: float) -> tuple[float, float]:
+    """Snap a live raw GPS coordinate to the nearest road within OSRM_LIVE_SNAP_RADIUS_M."""
+    url = f"{OSRM_BASE_URL}/nearest/v1/driving/{lon:.6f},{lat:.6f}?number=1&radiuses={OSRM_LIVE_SNAP_RADIUS_M}"
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=1.0) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("waypoints"):
+                    pt = data["waypoints"][0]["location"]
+                    return float(pt[1]), float(pt[0])  # returns lat, lon
+    except Exception as e:
+        logger.debug("[OSRM] Failed to snap live GPS: %s", e)
+    return lat, lon
+
+
 async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Fetch the real driving distance in metres from the local OSRM server.
