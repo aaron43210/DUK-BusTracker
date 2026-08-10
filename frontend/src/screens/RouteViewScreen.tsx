@@ -298,11 +298,10 @@ export default function RouteViewScreen({ route, navigation }: any) {
 
       const curLon = p1[0] + (p2[0] - p1[0]) * segFrac;
       const curLat = p1[1] + (p2[1] - p1[1]) * segFrac;
-      const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
 
       currentPosRef.current = [curLon, curLat];
       setAnimatedBusCoord([curLon, curLat]);
-      setBusBearing(bearing);
+      setBusBearing(0); // Disabled rotation per user request
 
       if (progress >= 1.0) {
         clearInterval(animIntervalRef.current);
