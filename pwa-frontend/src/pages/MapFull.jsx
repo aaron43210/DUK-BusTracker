@@ -312,13 +312,12 @@ export default function MapFull() {
 
   // ── Stop detail card ─────────────────────────────────────────────────────
   const direction = tripState?.trip?.direction || 'forward';
-  const schedule  = direction === 'forward' ? MORNING_SCHEDULE : EVENING_SCHEDULE;
 
   const StopCard = ({ stop }) => {
     const distKm = animatedBus && stop.lat && stop.lon
       ? haversineDistKm(animatedBus[0], animatedBus[1], Number(stop.lon), Number(stop.lat))
       : null;
-    const scheduled = schedule[stop.name] || '—';
+    const scheduled = direction === 'forward' ? (stop.morning_time || '—') : (stop.evening_time || '—');
     return (
       <div className="stop-card-overlay">
         <div className="stop-card__handle" />
