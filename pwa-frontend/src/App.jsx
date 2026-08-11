@@ -97,7 +97,7 @@ function NetworkGate({ children }) {
         boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
       }}>
         <div style={{ marginBottom: '24px' }}>
-          <img src="/buslogo.png" alt="App Logo" style={{ height: '64px', objectFit: 'contain' }} />
+          <img src="/duk-logo.png" alt="DUK Logo" style={{ height: '48px', objectFit: 'contain' }} />
         </div>
         <h2 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '10px', color: '#111' }}>
           No Internet Connection
@@ -154,7 +154,7 @@ function DeviceGate({ children }) {
   if (isAndroid) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
-        <img src="/buslogo.png" alt="App Logo" style={{ width: '120px', marginBottom: '24px', objectFit: 'contain' }} />
+        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Android App Available</h2>
         <p style={{ color: '#666', fontSize: '15px', lineHeight: '1.5', marginBottom: '32px' }}>
           We noticed you're on an Android device. To get the best experience, please download our dedicated native Android app!
@@ -176,7 +176,7 @@ function DeviceGate({ children }) {
   if (!isIos && !isLocalhost) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
-        <img src="/buslogo.png" alt="App Logo" style={{ width: '120px', marginBottom: '24px', objectFit: 'contain' }} />
+        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Mobile App Only</h2>
         <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.5', marginBottom: '32px' }}>
           The Bus Tracker is only available as a mobile application.<br/><br/>
@@ -190,7 +190,7 @@ function DeviceGate({ children }) {
   if (isIos && !isStandalone && !isLocalhost) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
-        <img src="/buslogo.png" alt="App Logo" style={{ width: '120px', marginBottom: '24px', objectFit: 'contain' }} />
+        <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Install Required</h2>
         <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.5', marginBottom: '32px' }}>
           This app is designed to run natively on your iPhone. <br/><br/>
