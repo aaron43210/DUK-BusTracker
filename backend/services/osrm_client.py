@@ -28,7 +28,7 @@ def haversine_m_math(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return R * 2 * math.asin(math.sqrt(a))
 
 
-OSRM_LIVE_SNAP_RADIUS_M = 40   # 40m snap radius: allows bus bays and campus stops to snap cleanly to the road network
+OSRM_LIVE_SNAP_RADIUS_M = 20   # 40m snap radius: allows bus bays and campus stops to snap cleanly to the road network
 
 
 async def snap_live_gps(lat: float, lon: float) -> tuple[float, float]:
@@ -47,24 +47,83 @@ async def snap_live_gps(lat: float, lon: float) -> tuple[float, float]:
     return lat, lon
 
 
-async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+async def get_osrm_route(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> dict:
     """
-    Fetch the real driving distance in metres from the local OSRM server.
-    If the server is down or returns an error, gracefully fallback to Haversine math.
+    Fetch real road distance (m) AND duration (s) from OSRM in a single call.
+    Returns {"distance_m": float, "duration_s": float, "from_osrm": bool}
+    Falls back to Haversine distance + 25 km/h heuristic if OSRM is unreachable.
     """
-    url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}&continue_straight=false&overview=false"
-    
+    url = (
+        f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
+        f"?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}"
+        f"&continue_straight=false&overview=false"
+    )
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == "Ok" and data.get("routes"):
-                    return float(data["routes"][0]["distance"])
+                    route = data["routes"][0]
+                    return {
+                        "distance_m": float(route["distance"]),
+                        "duration_s": float(route["duration"]),
+                        "from_osrm":  True,
+                    }
     except Exception as e:
-        logger.debug("[OSRM] Failed to fetch distance (fallback to Haversine): %s", e)
-        
-    return haversine_m_math(lat1, lon1, lat2, lon2)
+        logger.debug("[OSRM] get_osrm_route fallback: %s", e)
+
+    dist_m = haversine_m_math(lat1, lon1, lat2, lon2)
+    return {
+        "distance_m": dist_m,
+        "duration_s": (dist_m / 1000.0 / 25.0) * 3600.0,  # 25 km/h heuristic
+        "from_osrm":  False,
+    }
+
+
+def get_osrm_route_sync(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> dict:
+    """
+    Synchronous version of get_osrm_route — used in the training script (ml/train.py).
+    Returns {"distance_m": float, "duration_s": float, "from_osrm": bool}
+    """
+    import httpx as _httpx
+    url = (
+        f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
+        f"?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}"
+        f"&continue_straight=false&overview=false"
+    )
+    try:
+        with _httpx.Client(trust_env=False, timeout=2.5) as client:
+            resp = client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("routes"):
+                    route = data["routes"][0]
+                    return {
+                        "distance_m": float(route["distance"]),
+                        "duration_s": float(route["duration"]),
+                        "from_osrm":  True,
+                    }
+    except Exception as e:
+        logger.debug("[OSRM] get_osrm_route_sync fallback: %s", e)
+
+    dist_m = haversine_m_math(lat1, lon1, lat2, lon2)
+    return {
+        "distance_m": dist_m,
+        "duration_s": (dist_m / 1000.0 / 25.0) * 3600.0,
+        "from_osrm":  False,
+    }
+
+
+async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Backwards-compatible wrapper — returns only road distance in metres."""
+    info = await get_osrm_route(lat1, lon1, lat2, lon2)
+    return info["distance_m"]
+
 
 
 async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destinations: list[tuple[float, float]]) -> list[float]:

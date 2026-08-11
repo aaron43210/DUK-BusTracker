@@ -500,7 +500,14 @@ async def get_eta(
 
     stops_remaining = len([s for s in ahead if s["order_index"] <= stop.order_index])
 
-    now = datetime.now(timezone.utc)
+    # Compute elapsed minutes from trip start (was hardcoded to 0 before)
+    elapsed_minutes = 0.0
+    if active_trip and active_trip.started_at:
+        trip_started = active_trip.started_at
+        if trip_started.tzinfo is None:
+            trip_started = trip_started.replace(tzinfo=timezone.utc)
+        elapsed_minutes = max(0.0, (now - trip_started).total_seconds() / 60.0)
+
     prediction = await predict_eta(
         bus_lat=latest.lat,
         bus_lon=latest.lon,
@@ -510,7 +517,7 @@ async def get_eta(
         hour_of_day=now.hour,
         day_of_week=now.weekday(),
         trip_direction=1 if now.hour >= 17 else 0,
-        elapsed_minutes=0,   # would need trip start time
+        elapsed_minutes=elapsed_minutes,
         speed_last_3=speed_avg,
     )
 

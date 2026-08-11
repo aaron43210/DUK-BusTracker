@@ -19,7 +19,7 @@ from pathlib import Path
 
 # Need to import osrm_client which is in the parent directory
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from services.osrm_client import get_osrm_distance_m_sync
+from services.osrm_client import get_osrm_route_sync
 
 import joblib
 import numpy as np
@@ -31,11 +31,18 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 MODEL_PATH = Path(__file__).parent / "model.pkl"
+BUS_FACTOR  = 1.35  # must match services/eta_engine.py
 
 
-# ── Haversine ─────────────────────────────────────────────────────────────────
-def haversine_km(lat1, lon1, lat2, lon2):
-    return get_osrm_distance_m_sync(lat1, lon1, lat2, lon2) / 1000.0
+# ── Distance helper (uses OSRM road distance, not straight-line) ──────────────
+def road_dist_km(lat1, lon1, lat2, lon2):
+    return get_osrm_route_sync(lat1, lon1, lat2, lon2)["distance_m"] / 1000.0
+
+
+# ── OSRM ETA helper (road duration × bus factor) ─────────────────────────────
+def osrm_eta_minutes(lat1, lon1, lat2, lon2):
+    info = get_osrm_route_sync(lat1, lon1, lat2, lon2)
+    return (info["duration_s"] / 60.0) * BUS_FACTOR
 
 
 # ── Load stops ────────────────────────────────────────────────────────────────
@@ -149,7 +156,7 @@ def extract_features(rows: list[dict], stops: list[dict]) -> tuple[np.ndarray, n
                 # Find when the bus actually reached this stop
                 reached_at = None
                 for j in range(i + 1, len(trip)):
-                    d = haversine_km(trip[j][1], trip[j][2], stop["lat"], stop["lon"])
+                    d = road_dist_km(trip[j][1], trip[j][2], stop["lat"], stop["lon"])
                     if d <= 0.35:
                         reached_at = trip[j][0]
                         break
@@ -161,7 +168,8 @@ def extract_features(rows: list[dict], stops: list[dict]) -> tuple[np.ndarray, n
                 if actual_eta <= 0 or actual_eta > 120:
                     continue  # filter outliers
 
-                dist_to_stop = haversine_km(lat, lon, stop["lat"], stop["lon"])
+                dist_to_stop = road_dist_km(lat, lon, stop["lat"], stop["lon"])
+                eta_osrm     = osrm_eta_minutes(lat, lon, stop["lat"], stop["lon"])
 
                 # Count stops between bus and target (approximate via order_index)
                 bus_nearest, _ = find_nearest_stop(lat, lon, stops)
@@ -169,17 +177,17 @@ def extract_features(rows: list[dict], stops: list[dict]) -> tuple[np.ndarray, n
                 stop_order = stop["id"]
                 stops_remaining = abs(stop_order - bus_order)
 
-                baseline_eta = (dist_to_stop / max(25.0, speed_last_3)) * 60
-                
+
                 X_rows.append([
-                    dist_to_stop,       # distance_km
+                    dist_to_stop,       # distance_km      (road, not straight-line)
                     stops_remaining,    # stops_remaining
                     t.hour,             # hour_of_day
                     t.weekday(),        # day_of_week
                     int(is_evening),    # trip_direction
                     elapsed_min,        # elapsed_minutes
                     speed_last_3,       # speed_last_3
-                    baseline_eta,       # baseline_eta (replaces leaked historical_avg_tt)
+                    eta_osrm,           # osrm_eta_minutes  (road duration × bus factor)
+                    1,                  # from_osrm_flag    (always 1 during training)
                 ])
                 y_rows.append(actual_eta)
 
@@ -225,7 +233,8 @@ def train(rows: list[dict], stops_json: str | None = None, validate_only: bool =
 
     feature_names = [
         "distance_km", "stops_remaining", "hour_of_day", "day_of_week",
-        "trip_direction", "elapsed_minutes", "speed_last_3", "baseline_eta",
+        "trip_direction", "elapsed_minutes", "speed_last_3",
+        "osrm_eta_minutes", "from_osrm_flag",
     ]
     importance = dict(zip(feature_names, model.feature_importances_))
     logger.info("Feature importance: %s", importance)
