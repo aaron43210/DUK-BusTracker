@@ -2816,7 +2816,7 @@ textarea {
   z-index: 99999;
   background-color: #020b22;
   background-image: url('/splash_screen.png');
-  background-size: contain;
+  background-size: 100% 100%;
   background-position: center;
   background-repeat: no-repeat;
   display: flex;
