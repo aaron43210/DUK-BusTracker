@@ -256,6 +256,26 @@ export default function RouteView() {
   const visitedCount = Object.keys(visitedStops).length;
   const nextStop = currentNextIdx >= 0 ? stopsToShow[currentNextIdx] : null;
 
+  // ── Smooth sliding badge calculation ─────────────────────────────────────
+  const ROW_HEIGHT = 62; // px — must match CSS .ios-timeline-row height
+
+  let stopProgress = 0;
+  if (isActive && animatedBus && currentNextIdx > 0) {
+    const fromStop = stopsToShow[currentNextIdx - 1];
+    const toStop   = stopsToShow[currentNextIdx];
+    if (fromStop?.lat && fromStop?.lon && toStop?.lat && toStop?.lon) {
+      const totalDist   = haversineDistKm(fromStop.lat, fromStop.lon, toStop.lat, toStop.lon);
+      const coveredDist = haversineDistKm(fromStop.lat, fromStop.lon, animatedBus[1], animatedBus[0]);
+      stopProgress = totalDist > 0.001 ? Math.min(1, Math.max(0, coveredDist / totalDist)) : 0;
+    }
+  }
+
+  // Y position in px: center of prevStop dot + fraction toward nextStop dot
+  const anchorIdx = isActive
+    ? (currentNextIdx > 0 ? currentNextIdx - 1 : Math.max(0, currentNextIdx))
+    : (stopsToShow.length > 0 ? stopsToShow.length - 1 : 0);
+  const badgeTop = (anchorIdx + stopProgress) * ROW_HEIGHT + ROW_HEIGHT / 2;
+
   // Viewport for mini-map
   const mapVp = getMapViewport(stopsToShow, animatedBus);
 
@@ -447,15 +467,9 @@ export default function RouteView() {
                         )}
                       </div>
 
-                      {/* Center: Track */}
+                      {/* Center: Track — always render dot; floating badge handles active bus */}
                       <div className="ios-track-col">
-                        {isCurrent ? (
-                          <div className="ios-bus-badge-wrap">
-                            <div className="ios-bus-badge-circle">🚍</div>
-                          </div>
-                        ) : (
-                          <div className={`ios-track-dot ${isVisited ? 'ios-track-dot-visited' : ''}`} />
-                        )}
+                        <div className={`ios-track-dot ${isCurrent ? 'ios-track-dot-current' : ''} ${isVisited ? 'ios-track-dot-visited' : ''}`} />
                         {!isLast && (
                           <div className={`ios-track-line ${isVisited ? 'ios-track-line-visited' : ''}`} />
                         )}
@@ -472,7 +486,14 @@ export default function RouteView() {
                       </div>
                     </div>
                   );
-                })}
+                {})}
+
+                {/* ── Floating bus badge — slides smoothly down the track ── */}
+                {isActive && animatedBus && stopsToShow.length > 0 && (
+                  <div className="ios-bus-badge-float" style={{ top: badgeTop }}>
+                    <div className="ios-bus-badge-circle">🚍</div>
+                  </div>
+                )}
               </div>
             )}
           </div>

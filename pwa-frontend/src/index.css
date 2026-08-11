@@ -1148,13 +1148,14 @@ textarea {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 0 20px;
+  position: relative;  /* needed for floating badge */
 }
 
 .ios-timeline-row {
   display: flex;
   align-items: stretch;
-  min-height: 52px;
-  margin-bottom: 6px;
+  height: 62px;         /* fixed — must match ROW_HEIGHT in RouteView.jsx */
+  flex-shrink: 0;
 }
 
 /* Left Time Col */
@@ -1205,6 +1206,13 @@ textarea {
   border-radius: 5px;
   background: #9ca3af;
   z-index: 2;
+  flex-shrink: 0;
+}
+
+.ios-track-dot-current {
+  background: #2563eb;
+  width: 10px;
+  height: 10px;
 }
 
 .ios-track-dot-visited {
@@ -1236,6 +1244,23 @@ textarea {
   align-items: center;
   justify-content: center;
   z-index: 3;
+}
+
+/* ── Floating bus badge — absolutely positioned, slides down the track ── */
+.ios-bus-badge-float {
+  position: absolute;
+  left: 95px;                          /* time-col(75px) + track-col center(40px/2) */
+  transform: translateX(-50%) translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  background: rgba(37, 99, 235, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  pointer-events: none;
+  transition: top 0.55s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .ios-bus-badge-circle {
