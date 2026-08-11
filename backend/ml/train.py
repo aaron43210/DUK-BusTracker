@@ -166,10 +166,11 @@ def extract_features(rows: list[dict], stops: list[dict]) -> tuple[np.ndarray, n
 
             # For each future stop, compute actual time-to-stop (target)
             for stop in stops:
-                # Find when the bus actually reached this stop
+                # ── Arrival detection: fast haversine only (NOT OSRM) ─────────
+                # Using straight-line math here avoids millions of OSRM calls.
                 reached_at = None
                 for j in range(i + 1, len(trip)):
-                    d = road_dist_km(trip[j][1], trip[j][2], stop["lat"], stop["lon"])
+                    d = haversine_km(trip[j][1], trip[j][2], stop["lat"], stop["lon"])
                     if d <= 0.35:
                         reached_at = trip[j][0]
                         break
@@ -181,15 +182,17 @@ def extract_features(rows: list[dict], stops: list[dict]) -> tuple[np.ndarray, n
                 if actual_eta <= 0 or actual_eta > 120:
                     continue  # filter outliers
 
-                dist_to_stop = road_dist_km(lat, lon, stop["lat"], stop["lon"])
-                eta_osrm     = osrm_eta_minutes(lat, lon, stop["lat"], stop["lon"])
+                # ── OSRM: single call per confirmed sample ────────────────────
+                # Returns road distance + duration together (1 HTTP round-trip)
+                route_info   = get_osrm_route_sync(lat, lon, stop["lat"], stop["lon"])
+                dist_to_stop = route_info["distance_m"] / 1000.0
+                eta_osrm     = (route_info["duration_s"] / 60.0) * BUS_FACTOR
 
                 # Count stops between bus and target (approximate via order_index)
                 bus_nearest, _ = find_nearest_stop(lat, lon, stops)
                 bus_order = bus_nearest["id"] if bus_nearest else 0
                 stop_order = stop["id"]
                 stops_remaining = abs(stop_order - bus_order)
-
 
                 X_rows.append([
                     dist_to_stop,       # distance_km      (road, not straight-line)
@@ -203,6 +206,7 @@ def extract_features(rows: list[dict], stops: list[dict]) -> tuple[np.ndarray, n
                     1,                  # from_osrm_flag    (always 1 during training)
                 ])
                 y_rows.append(actual_eta)
+
 
     logger.info("Generated %d training samples", len(X_rows))
     return np.array(X_rows, dtype=np.float32), np.array(y_rows, dtype=np.float32)
