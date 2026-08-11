@@ -257,7 +257,7 @@ export default function RouteView() {
   const nextStop = currentNextIdx >= 0 ? stopsToShow[currentNextIdx] : null;
 
   // ── Smooth sliding badge calculation ─────────────────────────────────────
-  const ROW_HEIGHT = 62; // px — must match CSS .ios-timeline-row height
+  const ROW_HEIGHT = 54; // px — must match CSS .ios-timeline-row height
 
   let stopProgress = 0;
   if (isActive && animatedBus && currentNextIdx > 0) {
@@ -335,16 +335,22 @@ export default function RouteView() {
       );
     }
     if (tripName.includes('morning')) {
+      const lateTag = lateMins > 2
+        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {lateMins}m Late</span>
+        : null;
       return (
         <span>
-          <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Morning Trip</span> → Digital University Kerala
+          <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Morning Trip</span> → Digital University Kerala{lateTag}
         </span>
       );
     }
     if (tripName.includes('evening')) {
+      const lateTag = lateMins > 2
+        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {lateMins}m Late</span>
+        : null;
       return (
         <span>
-          <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Evening Trip</span> → Central Polytechnic
+          <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Evening Trip</span> → Central Polytechnic{lateTag}
         </span>
       );
     }
@@ -465,7 +471,7 @@ export default function RouteView() {
                     } else {
                       statusSubtext = 'Arrived';
                     }
-                  } else if (isOnline) {
+                  } else if (isOnline || (lateMins != null && (tripStatus === 'active' || tripStatus === 'connecting'))) {
                     if (lateMins > 1) delayType = 'late';
                     else if (lateMins < -1) delayType = 'ahead';
                     else delayType = 'ontime';

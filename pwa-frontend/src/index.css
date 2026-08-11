@@ -1026,12 +1026,12 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .ios-screen-title {
-  font-size: 26px;
-  font-weight: 800;
+  font-size: 20px;
+  font-weight: 700;
   color: var(--black);
 }
 
@@ -1072,10 +1072,10 @@ textarea {
 }
 
 .ios-trip-subtext {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--med-gray);
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 /* Single Stats Card */
@@ -1085,9 +1085,10 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 22px 20px;
-  margin-bottom: 24px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
 }
 
 .ios-stat-item {
@@ -1095,17 +1096,17 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ios-stat-value {
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 800;
   color: var(--black);
 }
 
 .ios-stat-label {
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--light-gray);
   letter-spacing: 0.5px;
@@ -1114,7 +1115,7 @@ textarea {
 
 .ios-stat-divider {
   width: 1px;
-  height: 32px;
+  height: 24px;
   background: var(--separator);
 }
 
@@ -1154,7 +1155,7 @@ textarea {
 .ios-timeline-row {
   display: flex;
   align-items: stretch;
-  height: 62px;         /* fixed — must match ROW_HEIGHT in RouteView.jsx */
+  height: 54px;         /* fixed — must match ROW_HEIGHT in RouteView.jsx */
   flex-shrink: 0;
 }
 
@@ -1168,14 +1169,14 @@ textarea {
 }
 
 .ios-sched-time {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: #4b5563;
   margin-bottom: 2px;
 }
 
 .ios-live-time {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   color: #16a34a;
 }
@@ -1185,7 +1186,7 @@ textarea {
 }
 
 .ios-live-time-muted {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #d1d5db;
 }
@@ -1286,7 +1287,7 @@ textarea {
 }
 
 .ios-stop-name {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   color: #1f2937;
   margin-bottom: 2px;
@@ -1295,7 +1296,7 @@ textarea {
 .ios-stop-name-current {
   color: #2563eb;
   font-weight: 800;
-  font-size: 15.5px;
+  font-size: 13.5px;
 }
 
 .ios-stop-name-visited {
@@ -1303,7 +1304,7 @@ textarea {
 }
 
 .ios-stop-subtext {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #9ca3af;
 }

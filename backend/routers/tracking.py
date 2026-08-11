@@ -24,6 +24,19 @@ from constants import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["tracking"])
 
+# ── Scheduled first-stop departure times (mins since midnight, IST) ──────────
+MORNING_DEPART_MINS = 7 * 60 + 30    # 07:30 AM — DUK departure
+EVENING_DEPART_MINS = 17 * 60 + 40   # 05:40 PM — DUK departure
+
+
+def _auto_late_minutes(direction: str, time_mins: int) -> "int | None":
+    """Compute how many minutes late the trip is vs its scheduled first-stop departure.
+    Returns None if the trip is on-time or early."""
+    is_morning = direction.lower() in ("forward", "morning")
+    depart     = MORNING_DEPART_MINS if is_morning else EVENING_DEPART_MINS
+    delay      = time_mins - depart
+    return delay if delay > 2 else None  # only flag if >2 min late
+
 
 # --- Global Memory Caches ---
 _STOPS_CACHE = None
@@ -187,11 +200,15 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
             if is_deviated and target_status != "connecting":
                 target_status = "active"
                 
+            # Prefer admin-set late value; fall back to auto-computed schedule delay
+            auto_late = _auto_late_minutes(active.direction, time_mins)
+            late_val  = active.late_by_minutes if active.late_by_minutes is not None else auto_late
+
             return {
                 "trip":           display_trip,
                 "status":         target_status,
                 "trip_id":        active.id,
-                "late_by_minutes": active.late_by_minutes,
+                "late_by_minutes": late_val,
                 "cancellation_reason": None,
                 "next_trip_time": None,
                 "is_deviated":    is_deviated,
@@ -246,11 +263,13 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 if is_gps_alive:
                     status = "active"
 
+                # Auto-compute delay even for scheduled-but-not-started trips
+                auto_late = _auto_late_minutes(target_trip.direction, time_mins)
                 return {
                     "trip": display_trip,
                     "status": status,
                     "trip_id": target_trip.id,
-                    "late_by_minutes": None,
+                    "late_by_minutes": auto_late,
                     "cancellation_reason": None,
                     "next_trip_time": None,
                     "is_deviated": is_deviated,
