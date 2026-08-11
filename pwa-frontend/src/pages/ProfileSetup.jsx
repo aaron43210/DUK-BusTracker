@@ -77,8 +77,8 @@ export default function ProfileSetup() {
       {/* ── DUK Logo ── */}
       <div className="setup-logo-wrap">
         <img
-          src="/duk-logo.png"
-          alt="Digital University Kerala"
+          src="/buslogo.png"
+          alt="App Logo"
           className="setup-duk-logo"
           onError={e => { e.target.style.display = 'none'; }}
         />

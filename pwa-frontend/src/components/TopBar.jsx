@@ -21,7 +21,7 @@ export default function TopBar({ onHamburger, title = 'DUK Bus Tracker', onBack,
       </div>
 
       <div className="topbar__center">
-        <img src="/duk-logo.png" alt="DUK Bus Tracker" className="topbar__logo-img" />
+        <img src="/buslogo.png" alt="DUK Bus Tracker" className="topbar__logo-img" />
         <img src="/canlab.png" alt="CanLab" className="topbar__logo-img" />
       </div>
 

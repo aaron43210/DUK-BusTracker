@@ -549,7 +549,7 @@ export default function RouteView() {
                 )}
               </div>
             )}
-          </div>
+          </div>)}
 
           {/* Live Map section header — hidden in idle mode */}
           {!isIdleMode && (
