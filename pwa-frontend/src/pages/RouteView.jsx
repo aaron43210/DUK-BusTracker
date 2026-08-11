@@ -9,6 +9,7 @@ import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import NotificationDrawer from '../components/NotificationDrawer';
 import BusMapView from '../components/BusMapView';
+import BusIdleAnimation from '../components/BusIdleAnimation';
 import {
   getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops,
 } from '../api';
@@ -225,6 +226,19 @@ export default function RouteView() {
   const isActive = tripStatus === 'active';
   const busIsLive = busPosition?.is_live === true;
   const isOnline = isActive;
+  const isUnscheduled = tripName.includes('unscheduled');
+
+  // ── Idle mode detection ───────────────────────────────────────────────────
+  // Idle = no useful timeline to show. Covers:
+  //   1. Post-evening (after 8:30 PM) / overnight (before 6:00 AM)
+  //   2. Midday gap between morning end and 5 PM, when morning trip is completed
+  //   3. Unscheduled trips (bus is moving but not on a known route)
+  const _now       = new Date();
+  const _timeMins  = _now.getHours() * 60 + _now.getMinutes();
+  const _isNight   = _timeMins >= 1230 || _timeMins < 360;   // after 8:30 PM or before 6 AM
+  const _isMidDay  = _timeMins >= 660  && _timeMins < 1020;  // 11 AM – 5 PM
+  const isIdleMode = isUnscheduled
+    || (!isActive && (_isNight || (_isMidDay && tripStatus === 'completed')));
 
   // Build timeline from stops + visit history
   // Only show visited data when a trip is actively running to avoid stale morning data showing all afternoon
@@ -404,7 +418,8 @@ export default function RouteView() {
             {getSubtextStatus()}
           </div>
 
-          {/* Stats Card */}
+          {/* Stats Card — hidden in idle mode */}
+          {!isIdleMode && (
           <div className="ios-stats-card">
             <div className="ios-stat-item">
               <div className="ios-stat-value">{etaText}</div>
@@ -421,9 +436,15 @@ export default function RouteView() {
               <div className="ios-stat-label">STOPS</div>
             </div>
           </div>
+          )}
 
-          {/* Stop Timeline */}
-          <div className="ios-timeline-card">
+          {/* Stop Timeline — replaced by animated bus in idle mode */}
+          {isIdleMode ? (
+            <BusIdleAnimation
+              nextTripTime={tripState?.next_trip_time}
+              isUnscheduled={isUnscheduled}
+            />
+          ) : (<div className="ios-timeline-card">
             {stopsToShow.length === 0 ? (
               <div className="ios-empty-state">
                 <div className="ios-empty-text">{getTimelineEmptyMsg()}</div>
@@ -530,7 +551,8 @@ export default function RouteView() {
             )}
           </div>
 
-          {/* Live Map */}
+          {/* Live Map section header — hidden in idle mode */}
+          {!isIdleMode && (
           <div className="ios-section-header-row">
             <div className="ios-section-title">Live Map</div>
             {busPosition?.server_time && (
@@ -539,8 +561,9 @@ export default function RouteView() {
               </div>
             )}
           </div>
+          )}
 
-          <div className="ios-map-card" onClick={() => navigate('/map')}>
+          <div className={isIdleMode ? 'ios-map-card ios-map-card--idle' : 'ios-map-card'} onClick={() => navigate('/map')}>
             <BusMapView
               interactive={false}
               center={mapVp.center}
