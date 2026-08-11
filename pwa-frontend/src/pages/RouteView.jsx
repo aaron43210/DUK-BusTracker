@@ -231,10 +231,25 @@ export default function RouteView() {
   const visitedStops = isActive ? (routeHistory?.visitedStops || {}) : {};
   const arrivalTimes = isActive ? (routeHistory?.arrivalTimes || {}) : {};
 
-  // Filter to only morning or evening stops based on current direction
-  const stopsToShow = stops.filter(s =>
+  // Helper: parse time string like "07:30 AM" → minutes since midnight for sorting
+  const timeToMins = (t) => {
+    if (!t) return 9999;
+    const [time, ampm] = t.trim().split(' ');
+    let [h, m] = time.split(':').map(Number);
+    if (ampm === 'PM' && h !== 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
+  };
+
+  // Filter stops for current direction, then sort correctly:
+  // Morning: natural DB order (Central Poly → DUK, 07:30 AM ascending)
+  // Evening: sort by evening_time ascending (DUK → Central Poly, 05:40 PM first)
+  const stopsFiltered = stops.filter(s =>
     direction === 'forward' ? !!s.morning_time : !!s.evening_time
   );
+  const stopsToShow = direction === 'forward'
+    ? stopsFiltered
+    : [...stopsFiltered].sort((a, b) => timeToMins(a.evening_time) - timeToMins(b.evening_time));
 
   // Find "current next stop" = first unvisited stop
   const currentNextIdx = stopsToShow.findIndex(s => !visitedStops[s.name]);
@@ -482,7 +497,7 @@ export default function RouteView() {
               isLive={busPosition?.is_live === true}
               markerLabel={markerLabel}
               stops={stopsToShow}
-              plannedCoords={plannedCoords}
+              plannedCoords={direction === 'reverse' ? [...plannedCoords].reverse() : plannedCoords}
               trailCoords={trailCoords}
               style={{ height: '100%' }}
             />
