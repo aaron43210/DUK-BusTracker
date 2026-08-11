@@ -2734,57 +2734,7 @@ textarea {
   flex-shrink: 0;
 }
 
-.bus-idle-road {
-  width: 100%;
-  background: linear-gradient(135deg, #f1f5f9, #e2e8f0, #f1f5f9);
-  border-radius: 16px;
-  height: 64px;
-  overflow: hidden;
-  position: relative;
-  margin-bottom: 10px;
-  border: 1px solid #e5e7eb;
-  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.04);
-}
 
-/* Dashed center line */
-.bus-idle-road::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: repeating-linear-gradient(
-    90deg,
-    #cbd5e1 0px, #cbd5e1 20px,
-    transparent 20px, transparent 40px
-  );
-  transform: translateY(-50%);
-  opacity: 0.5;
-}
-
-.bus-idle-bus {
-  position: absolute;
-  top: 50%;
-  font-size: 38px;
-  animation: bus-drive 3.5s linear infinite;
-  filter: drop-shadow(1px 2px 4px rgba(0, 0, 0, 0.15));
-  z-index: 2;
-  line-height: 1;
-}
-
-.bus-idle-scenery {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-60%);
-  font-size: 22px;
-  z-index: 1;
-  pointer-events: none;
-  opacity: 0.5;
-}
-
-.bus-idle-scenery--left  { left: 6%; }
-.bus-idle-scenery--right { right: 6%; }
 
 .bus-idle-label {
   font-size: 13px;
