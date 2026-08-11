@@ -470,7 +470,7 @@ export default function RouteView() {
             )}
           </div>
 
-          <div className="ios-map-card" onClick={() => navigate('/map')} style={{ height: '800px', marginBottom: '-30px' }}>
+          <div className="ios-map-card" onClick={() => navigate('/map')}>
             <BusMapView
               interactive={false}
               center={mapVp.center}

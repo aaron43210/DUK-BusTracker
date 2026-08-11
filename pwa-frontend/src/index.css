@@ -1318,7 +1318,8 @@ textarea {
 }
 
 .ios-map-card {
-  height: 550px;
+  height: 250px;
+  width: 100%;
   border-radius: 20px;
   overflow: hidden;
   position: relative;
