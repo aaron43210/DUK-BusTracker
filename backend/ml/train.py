@@ -45,6 +45,19 @@ def osrm_eta_minutes(lat1, lon1, lat2, lon2):
     return (info["duration_s"] / 60.0) * BUS_FACTOR
 
 
+# ── Fast straight-line haversine (for speed between consecutive GPS pings) ────
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Pure-math straight-line distance — used only for GPS ping speed calc."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+
 # ── Load stops ────────────────────────────────────────────────────────────────
 DEFAULT_STOPS = [
     {"id": 0,  "name": "Central Polytechnic",           "lat": 8.5350, "lon": 76.9908},
