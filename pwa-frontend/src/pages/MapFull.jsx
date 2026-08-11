@@ -11,7 +11,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import {
-  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment,
+  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops,
 } from '../api';
 import { getUser } from '../storage';
 import {
@@ -46,6 +46,7 @@ export default function MapFull() {
   const [eta,           setEta]           = useState(null);
   const [loading,       setLoading]       = useState(true);
   const [autoCenter,    setAutoCenter]    = useState(true);
+  const [is3D,          setIs3D]          = useState(false);
 
   const user = getUser();
 
@@ -219,19 +220,19 @@ export default function MapFull() {
   // ── Fetch data ──────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
     try {
-      const [tripRes, busRes, histRes] = await Promise.allSettled([
-        getTripState(), getLatestGps(), getRouteHistory(),
+      const [tripRes, busRes, histRes, stopsRes] = await Promise.allSettled([
+        getTripState(), getLatestGps(), getRouteHistory(), getStops(),
       ]);
 
       const trip    = tripRes.status === 'fulfilled' ? tripRes.value    : null;
       const bus     = busRes.status  === 'fulfilled' ? busRes.value     : null;
       const history = histRes.status === 'fulfilled' ? histRes.value    : null;
+      const fetchedStops = stopsRes.status === 'fulfilled' ? stopsRes.value : [];
 
       setTripState(trip);
       setBusPosition(bus);
 
-      const currentStops = trip?.stops || [];
-      if (currentStops.length) setStops(currentStops);
+      if (fetchedStops.length > 0) setStops(fetchedStops);
 
       if (bus?.lat && bus?.lon) {
         if (bus?.is_live) {
@@ -310,8 +311,21 @@ export default function MapFull() {
   const zoomIn  = () => mapRef.current?.zoomIn({ duration: 300 });
   const zoomOut = () => mapRef.current?.zoomOut({ duration: 300 });
 
+  const toggle3D = () => {
+    if (is3D) {
+      mapRef.current?.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+      setIs3D(false);
+    } else {
+      mapRef.current?.easeTo({ pitch: 60, bearing: 45, duration: 1000 });
+      setIs3D(true);
+    }
+  };
+
   // ── Stop detail card ─────────────────────────────────────────────────────
-  const direction = tripState?.trip?.direction || 'forward';
+  const tripName = (typeof tripState?.trip === 'string' ? tripState.trip : '').toLowerCase();
+  const direction = tripName.includes('morning') ? 'forward'
+    : tripName.includes('evening') ? 'reverse'
+    : new Date().getHours() >= 14 ? 'reverse' : 'forward';
 
   const StopCard = ({ stop }) => {
     const distKm = animatedBus && stop.lat && stop.lon
@@ -398,6 +412,16 @@ export default function MapFull() {
         <div className="map-ctrl-divider" />
         <button className="map-ctrl-btn" onClick={zoomOut} title="Zoom out" id="map-zoom-out">
           <Minus size={20} color="#1f2937" />
+        </button>
+        <div className="map-ctrl-divider" />
+        <button 
+          className="map-ctrl-btn" 
+          onClick={toggle3D} 
+          title="Toggle 3D View" 
+          id="map-3d"
+          style={{ fontWeight: '800', fontSize: '13px', color: is3D ? '#2563eb' : '#1f2937' }}
+        >
+          3D
         </button>
       </div>
 

@@ -1326,6 +1326,35 @@ textarea {
   cursor: pointer;
 }
 
+/* ── Mini-map Next Stop Pill ─────────────────────────────────────────────── */
+.map-next-stop-pill {
+  position: absolute;
+  bottom: 56px; /* sits above the "Tap to view full map" pill */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  animation: bannerFadeIn 0.25s ease;
+}
+
+@keyframes bannerFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.map-next-stop-pill--active     { background: rgba(22, 163, 74, 0.90); }
+.map-next-stop-pill--unscheduled{ background: rgba(217, 119, 6, 0.92); }
+.map-next-stop-pill--offline    { background: rgba(15, 23, 42, 0.78);  }
+
 .ios-map-overlay {
   position: absolute;
   bottom: 0;
@@ -1769,6 +1798,22 @@ textarea {
   height: 36px;
   object-fit: contain;
   display: block;
+}
+
+.bus-marker-pill {
+  margin-bottom: 2px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+  background: rgba(30, 41, 59, 0.9);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  animation: bannerFadeIn 0.2s ease;
 }
 
 .bus-marker-tag {

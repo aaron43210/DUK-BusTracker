@@ -5,13 +5,12 @@
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Expand } from 'lucide-react';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import NotificationDrawer from '../components/NotificationDrawer';
 import BusMapView from '../components/BusMapView';
 import {
-  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment,
+  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops,
 } from '../api';
 import { getUser } from '../storage';
 import {
@@ -20,6 +19,27 @@ import {
 } from '../timetable';
 
 const POLL_MS = 2500;
+
+// ── Next Stop Banner — tiny pill above "Tap to view full map" ──────────
+function NextStopBanner({ tripState, nextStop }) {
+  const status = tripState?.status ?? 'offline';
+  const tripName = (typeof tripState?.trip === 'string' ? tripState.trip : '').toLowerCase();
+  const isActive = status === 'active';
+
+  if (isActive && !tripName.includes('unscheduled') && nextStop) {
+    return (
+      <div className="map-next-stop-pill map-next-stop-pill--active">
+        Heading to {nextStop.name}
+      </div>
+    );
+  }
+
+  if (isActive && tripName.includes('unscheduled')) {
+    return <div className="map-next-stop-pill map-next-stop-pill--unscheduled">Unscheduled</div>;
+  }
+
+  return <div className="map-next-stop-pill map-next-stop-pill--offline">Not in Service</div>;
+}
 
 export default function RouteView() {
   const navigate = useNavigate();
@@ -127,27 +147,29 @@ export default function RouteView() {
     setError('');
 
     try {
-      const [tripRes, busRes, histRes] = await Promise.allSettled([
+      const [tripRes, busRes, histRes, stopsRes] = await Promise.allSettled([
         getTripState(),
         getLatestGps(),
         getRouteHistory(),
+        getStops(),
       ]);
 
       const trip = tripRes.status === 'fulfilled' ? tripRes.value : null;
       const bus = busRes.status === 'fulfilled' ? busRes.value : null;
       const history = histRes.status === 'fulfilled' ? histRes.value : null;
+      const fetchedStops = stopsRes.status === 'fulfilled' ? stopsRes.value : [];
 
       setTripState(trip);
       setBusPosition(bus);
       setRouteHistory(history);
 
-      if (bus?.lat && bus?.lon) {
-        await animateBusTo(bus.lat, bus.lon);
+      // Only update stops when we get data — avoids blanking on network flap
+      if (fetchedStops.length > 0) {
+        setStops(fetchedStops);
       }
 
-      // Load stops list from trip data
-      if (trip?.stops) {
-        setStops(trip.stops);
+      if (bus?.lat && bus?.lon) {
+        await animateBusTo(bus.lat, bus.lon);
       }
 
       // ETA to boarding stop
@@ -191,8 +213,13 @@ export default function RouteView() {
   }, [fetchAll]);
 
   // ── Derived data ─────────────────────────────────────────────────────────
-  const direction = tripState?.trip?.direction || (new Date().getHours() >= 14 ? 'reverse' : 'forward');
-  const lateMins = tripState?.trip?.late_by_minutes ?? null;
+  // trip is a plain string like "Morning", "Evening", "Unscheduled"
+  const tripName = (typeof tripState?.trip === 'string' ? tripState.trip : '').toLowerCase();
+  const direction = tripName.includes('morning') ? 'forward'
+    : tripName.includes('evening') ? 'reverse'
+      : new Date().getHours() >= 14 ? 'reverse' : 'forward';
+
+  const lateMins = tripState?.late_by_minutes ?? null;
 
   const tripStatus = tripState?.status ?? 'idle';
   const isActive = tripStatus === 'active';
@@ -203,24 +230,38 @@ export default function RouteView() {
   const visitedStops = routeHistory?.visitedStops || {};
   const arrivalTimes = routeHistory?.arrivalTimes || {};
 
-  // Use API stops or fallback; never need a schedule dict since times are on each stop object
-  // NetworkGate guarantees online — stops will always arrive from the API
-  const stopsToShow = stops;
+  // Filter to only morning or evening stops based on current direction
+  const stopsToShow = stops.filter(s =>
+    direction === 'forward' ? !!s.morning_time : !!s.evening_time
+  );
 
   // Find "current next stop" = first unvisited stop
   const currentNextIdx = stopsToShow.findIndex(s => !visitedStops[s.name]);
   const visitedCount = Object.keys(visitedStops).length;
+  const nextStop = currentNextIdx >= 0 ? stopsToShow[currentNextIdx] : null;
 
   // Viewport for mini-map
-  const mapVp = getMapViewport(stops, animatedBus);
+  const mapVp = getMapViewport(stopsToShow, animatedBus);
 
-  // Delay badge
-  const delayBadge = getDelayBadge(null, null, lateMins);
+  // Pill label shown above bus marker
+  const markerLabel = isActive && !tripName.includes('unscheduled') && nextStop
+    ? `Heading to ${nextStop.name}`
+    : isActive && tripName.includes('unscheduled')
+    ? 'Unscheduled'
+    : 'Not in Service';
 
   // Stats text
   const etaText = eta?.eta_minutes != null ? `${Math.round(eta.eta_minutes)} min` : '—';
   const speedText = busPosition?.speed != null ? `${Math.round(busPosition.speed)} km/h` : '—';
   const stopsDoneText = `${visitedCount}/${stopsToShow.length}`;
+
+  // Timeline empty state message
+  const getTimelineEmptyMsg = () => {
+    if (tripStatus === 'cancelled') return 'This trip has been cancelled.';
+    if (tripName.includes('unscheduled')) return 'Bus is on an unscheduled route.';
+    if (tripStatus === 'connecting') return 'Connecting to bus GPS…';
+    return 'No stop arrivals recorded yet.';
+  };
 
   // Format last updated time
   const formatLastUpdated = (isoStr) => {
@@ -231,12 +272,9 @@ export default function RouteView() {
 
   // Format current status subtext
   const getSubtextStatus = () => {
-    const rawTrip = typeof tripState?.trip === 'string' ? tripState.trip : (tripState?.trip?.direction || '');
     const status = tripState?.status ?? 'offline';
     const nextTripTime = tripState?.next_trip_time;
-    const tripLower = (rawTrip || '').toLowerCase();
 
-    // 1. Cancelled Trip
     if (status === 'cancelled') {
       return (
         <span style={{ color: '#ef4444', fontWeight: 600 }}>
@@ -244,68 +282,41 @@ export default function RouteView() {
         </span>
       );
     }
-
-    // 2. Connecting to bus GPS
-    if (status === 'connecting') {
-      return (
-        <span style={{ color: '#d97706', fontWeight: 600 }}>
-          Connecting to Bus GPS…
-        </span>
-      );
-    }
-
-    // 3. Special Service
-    if (tripLower.includes('special')) {
+    // 'connecting' state — fall through to show trip name below
+    if (tripName.includes('special')) {
       return (
         <span>
           <span style={{ color: '#8b5cf6', fontWeight: 700 }}>Special Service</span> → {direction === 'forward' ? 'Digital University Kerala' : 'Central Polytechnic'}
         </span>
       );
     }
-
-    // 4. Morning Active Trip
-    if (tripLower.includes('morning') || tripLower === 'forward') {
+    if (tripName.includes('morning')) {
       return (
         <span>
           <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Morning Trip</span> → Digital University Kerala
         </span>
       );
     }
-
-    // 5. Evening Active Trip
-    if (tripLower.includes('evening') || tripLower === 'reverse') {
+    if (tripName.includes('evening')) {
       return (
         <span>
           <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Evening Trip</span> → Central Polytechnic
         </span>
       );
     }
-
-    // 6. Unscheduled Active Trip (Bus moving outside timetable)
-    if (tripLower.includes('unscheduled')) {
-      return (
-        <span style={{ color: '#d97706', fontWeight: 700 }}>
-          Unscheduled Trip (Live Tracking)
-        </span>
-      );
+    if (tripName.includes('unscheduled')) {
+      return <span style={{ color: '#d97706', fontWeight: 700 }}>Unscheduled Trip (Live Tracking)</span>;
     }
-
-    // 7. Weekend (No service on Saturday / Sunday unless active)
     const isWeekend = [0, 6].includes(new Date().getDay()) || status === 'weekend';
     if (isWeekend) {
       return nextTripTime ? `Weekend (No Service) • Next Trip: ${nextTripTime}` : 'Weekend (No Service)';
     }
-
-    // 8. Waiting / Driver Preparation Window
     if (status === 'waiting') {
       return nextTripTime ? `Waiting for Service • Next Trip: ${nextTripTime}` : 'Waiting for Service';
     }
-
-    // 9. Completed Trip (e.g. Morning finished on weekday, waiting for evening)
     if (status === 'completed') {
       return nextTripTime ? `Trip Completed • Next Trip: ${nextTripTime}` : 'Trip Completed';
     }
-
     return nextTripTime ? `Not in Service • Next Trip: ${nextTripTime}` : 'Not in Service';
   };
 
@@ -365,7 +376,7 @@ export default function RouteView() {
           <div className="ios-timeline-card">
             {stopsToShow.length === 0 ? (
               <div className="ios-empty-state">
-                <div className="ios-empty-text">No stop arrivals recorded yet.</div>
+                <div className="ios-empty-text">{getTimelineEmptyMsg()}</div>
               </div>
             ) : (
               <div className="ios-timeline">
@@ -464,9 +475,11 @@ export default function RouteView() {
               interactive={false}
               center={mapVp.center}
               zoom={mapVp.zoom}
+              defaultPitch={50}
               busCoord={animatedBus}
               isLive={busPosition?.is_live === true}
-              stops={stops}
+              markerLabel={markerLabel}
+              stops={stopsToShow}
               plannedCoords={plannedCoords}
               trailCoords={trailCoords}
               style={{ height: '100%' }}

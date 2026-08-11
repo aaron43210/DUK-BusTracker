@@ -27,8 +27,11 @@ export default function BusMapView({
   interactive   = true,
   center        = [76.9366, 8.5241],
   zoom          = 12,
+  defaultPitch  = 0,
+  defaultBearing = 0,
   busCoord      = null,
   isLive        = false,
+  markerLabel   = null,   // small pill shown ABOVE the bus icon
   stops         = [],
   plannedCoords = [],
   trailCoords   = [],
@@ -51,11 +54,13 @@ export default function BusMapView({
       style:       MAP_STYLE,
       center,
       zoom,
+      pitch:       defaultPitch,
+      bearing:     defaultBearing,
       minZoom:     6,
       maxZoom:     18,
       maxBounds: [
-        [73.50, 7.50],  // Southwest: South of Kanyakumari / Lakshadweep Sea
-        [84.50, 19.50]  // Northeast: North of Telangana & Andhra Pradesh
+        [73.50, 7.50],
+        [84.50, 19.50]
       ],
       interactive,
       attributionControl: false,
@@ -187,7 +192,7 @@ export default function BusMapView({
     updateMapData(map, plannedCoords, trailCoords, stops);
   }, [plannedCoords, trailCoords, stops]);
 
-  // ── Sync bus marker ──────────────────────────────────────────────────────
+  // ── Sync bus marker ─────────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -198,23 +203,38 @@ export default function BusMapView({
       return;
     }
 
-    const iconSrc = isLive ? '/bus_green.png' : '/bus_gray.png';
+    const iconSrc  = isLive ? '/bus_green.png' : '/bus_gray.png';
+    const labelHtml = markerLabel
+      ? `<div class="bus-marker-pill">${markerLabel}</div>`
+      : '';
 
     if (!busMarkerRef.current) {
       const el = document.createElement('div');
-      el.className = 'bus-marker-container';
-      el.innerHTML = `<img src="${iconSrc}" class="bus-marker-img" alt="Bus" />`;
+      el.className = 'bus-marker-wrapper';
+      el.innerHTML = `${labelHtml}<div class="bus-marker-container"><img src="${iconSrc}" class="bus-marker-img" alt="Bus" /></div>`;
       busMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat(busCoord)
         .addTo(map);
     } else {
-      const img = busMarkerRef.current.getElement()?.querySelector('.bus-marker-img');
-      if (img && img.getAttribute('src') !== iconSrc) {
-        img.src = iconSrc;
+      const el = busMarkerRef.current.getElement();
+      // Update icon
+      const img = el?.querySelector('.bus-marker-img');
+      if (img && img.getAttribute('src') !== iconSrc) img.src = iconSrc;
+      // Update pill text
+      let pill = el?.querySelector('.bus-marker-pill');
+      if (markerLabel) {
+        if (!pill) {
+          pill = document.createElement('div');
+          pill.className = 'bus-marker-pill';
+          el.insertBefore(pill, el.firstChild);
+        }
+        pill.textContent = markerLabel;
+      } else if (pill) {
+        pill.remove();
       }
       busMarkerRef.current.setLngLat(busCoord);
     }
-  }, [busCoord, isLive]);
+  }, [busCoord, isLive, markerLabel]);
 
   // ── Sync center/zoom (for mini-map controlled mode) ──────────────────────
   useEffect(() => {
