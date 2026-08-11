@@ -15,7 +15,7 @@ import {
 import { getUser } from '../storage';
 import {
   getDelayBadge, computeEstimatedTime, getMapViewport,
-  haversineDistKm, todayStr,
+  haversineDistKm, todayStr, parseTimeToMinutes,
 } from '../timetable';
 
 const POLL_MS = 2500;
@@ -241,14 +241,14 @@ export default function RouteView() {
     return h * 60 + m;
   };
 
-  // Filter stops for current direction, then sort correctly:
-  // Morning: natural DB order (Central Poly → DUK, 07:30 AM ascending)
-  // Evening: sort by evening_time ascending (DUK → Central Poly, 05:40 PM first)
+  // Filter stops for current direction, then sort by scheduled time ascending:
+  // Morning: Central Poly (07:30 AM) → DUK (09:20 AM)
+  // Evening: DUK (05:40 PM) → Central Poly (07:30 PM)
   const stopsFiltered = stops.filter(s =>
     direction === 'forward' ? !!s.morning_time : !!s.evening_time
   );
   const stopsToShow = direction === 'forward'
-    ? stopsFiltered
+    ? [...stopsFiltered].sort((a, b) => timeToMins(a.morning_time) - timeToMins(b.morning_time))
     : [...stopsFiltered].sort((a, b) => timeToMins(a.evening_time) - timeToMins(b.evening_time));
 
   // Find "current next stop" = first unvisited stop
@@ -264,8 +264,9 @@ export default function RouteView() {
     const fromStop = stopsToShow[currentNextIdx - 1];
     const toStop   = stopsToShow[currentNextIdx];
     if (fromStop?.lat && fromStop?.lon && toStop?.lat && toStop?.lon) {
-      const totalDist   = haversineDistKm(fromStop.lat, fromStop.lon, toStop.lat, toStop.lon);
-      const coveredDist = haversineDistKm(fromStop.lat, fromStop.lon, animatedBus[1], animatedBus[0]);
+      // Bug 5 fix: haversineDistKm signature is (lon1, lat1, lon2, lat2)
+      const totalDist   = haversineDistKm(fromStop.lon, fromStop.lat, toStop.lon, toStop.lat);
+      const coveredDist = haversineDistKm(fromStop.lon, fromStop.lat, animatedBus[0], animatedBus[1]);
       stopProgress = totalDist > 0.001 ? Math.min(1, Math.max(0, coveredDist / totalDist)) : 0;
     }
   }
@@ -287,7 +288,13 @@ export default function RouteView() {
     : 'Not in Service';
 
   // Stats text
-  const etaText = eta?.eta_minutes != null ? `${Math.round(eta.eta_minutes)} min` : '—';
+  // ETA: guard on status==='passed' (bus already past boarding stop) — show '—' not stale minutes
+  const etaText = (() => {
+    if (!eta || !isActive) return '\u2014';
+    if (eta.status === 'passed' || eta.status === 'deviated') return '\u2014';
+    if (eta.eta_minutes != null) return `${Math.round(eta.eta_minutes)} min`;
+    return '\u2014';
+  })();
   const speedText = (busIsLive && busPosition?.speed_kmh != null)
     ? `${Math.round(busPosition.speed_kmh)} km/h` : '—';
   const stopsDoneText = `${visitedCount}/${stopsToShow.length}`;
@@ -395,7 +402,7 @@ export default function RouteView() {
           <div className="ios-stats-card">
             <div className="ios-stat-item">
               <div className="ios-stat-value">{etaText}</div>
-              <div className="ios-stat-label">NEXT STOP</div>
+              <div className="ios-stat-label">TO YOUR STOP</div>
             </div>
             <div className="ios-stat-divider" />
             <div className="ios-stat-item">
@@ -435,17 +442,36 @@ export default function RouteView() {
                   let delayType = 'none';
                   let statusSubtext = 'Scheduled';
 
-                  if (isVisited) {
-                    statusSubtext = 'Arrived';
-                    if (lateMins > 1) delayType = 'late';
-                    else if (lateMins < -1) delayType = 'ahead';
+                  // Skipped: not visited but there are visited stops chronologically AFTER this one
+                  const isSkipped = !isVisited && isActive &&
+                    stopsToShow.slice(idx + 1).some(s => visitedStops[s.name]);
+
+                  if (isSkipped) {
+                    statusSubtext = 'Skipped';
+                    delayType = 'late'; // red
+                  } else if (isVisited) {
+                    // Per-stop delay: compare actual arrival vs scheduled
+                    if (actualTime && scheduled) {
+                      const perStopDiff = parseTimeToMinutes(actualTime) - parseTimeToMinutes(scheduled);
+                      if (perStopDiff > 1) {
+                        delayType = 'late';
+                        statusSubtext = `Arrived • +${perStopDiff}m late`;
+                      } else if (perStopDiff < -1) {
+                        delayType = 'ahead';
+                        statusSubtext = `Arrived • ${Math.abs(perStopDiff)}m early`;
+                      } else {
+                        statusSubtext = 'Arrived on time';
+                      }
+                    } else {
+                      statusSubtext = 'Arrived';
+                    }
                   } else if (isOnline) {
                     if (lateMins > 1) delayType = 'late';
                     else if (lateMins < -1) delayType = 'ahead';
                     else delayType = 'ontime';
 
                     if (isCurrent) {
-                      statusSubtext = eta?.eta_minutes != null ? `Approaching • ETA ${Math.round(eta.eta_minutes)} min` : 'Next Stop';
+                      statusSubtext = 'Next Stop';
                     } else {
                       if (delayType === 'late') statusSubtext = `+${lateMins}m delay`;
                       else if (delayType === 'ahead') statusSubtext = `${Math.abs(lateMins)}m ahead`;
@@ -480,13 +506,13 @@ export default function RouteView() {
                         <div className={`ios-stop-name ${isCurrent ? 'ios-stop-name-current' : ''} ${isVisited ? 'ios-stop-name-visited' : ''}`}>
                           {stop.name}
                         </div>
-                        <div className={`ios-stop-subtext ${isCurrent ? 'ios-stop-subtext-current' : ''} ${delayType === 'late' && !isVisited ? 'ios-stop-subtext-late' : ''} ${(delayType === 'ahead' || delayType === 'ontime') && !isVisited && isOnline && !isCurrent ? 'ios-stop-subtext-ahead' : ''}`}>
+                        <div className={`ios-stop-subtext ${isCurrent ? 'ios-stop-subtext-current' : ''} ${delayType === 'late' ? 'ios-stop-subtext-late' : ''} ${(delayType === 'ahead' || delayType === 'ontime') && !isVisited && isOnline && !isCurrent ? 'ios-stop-subtext-ahead' : ''}`}>
                           {statusSubtext}
                         </div>
                       </div>
                     </div>
                   );
-                {})}
+                })}
 
                 {/* ── Floating bus badge — slides smoothly down the track ── */}
                 {isActive && animatedBus && stopsToShow.length > 0 && (
