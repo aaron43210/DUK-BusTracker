@@ -252,7 +252,7 @@ export default function RouteView() {
 
   // Stats text
   const etaText = eta?.eta_minutes != null ? `${Math.round(eta.eta_minutes)} min` : '—';
-  const speedText = busPosition?.speed != null ? `${Math.round(busPosition.speed)} km/h` : '—';
+  const speedText = busPosition?.speed_kmh != null ? `${Math.round(busPosition.speed_kmh)} km/h` : '—';
   const stopsDoneText = `${visitedCount}/${stopsToShow.length}`;
 
   // Timeline empty state message
