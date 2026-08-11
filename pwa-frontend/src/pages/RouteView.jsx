@@ -336,7 +336,7 @@ export default function RouteView() {
     }
     if (tripName.includes('morning')) {
       const lateTag = lateMins > 2
-        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {lateMins}m Late</span>
+        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> • Delayed by {lateMins} mins</span>
         : null;
       return (
         <span>
@@ -346,7 +346,7 @@ export default function RouteView() {
     }
     if (tripName.includes('evening')) {
       const lateTag = lateMins > 2
-        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {lateMins}m Late</span>
+        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> • Delayed by {lateMins} mins</span>
         : null;
       return (
         <span>
@@ -479,7 +479,7 @@ export default function RouteView() {
                     if (isCurrent) {
                       statusSubtext = 'Next Stop';
                     } else {
-                      if (delayType === 'late') statusSubtext = `+${lateMins}m delay`;
+                      if (delayType === 'late') statusSubtext = 'Delayed';
                       else if (delayType === 'ahead') statusSubtext = `${Math.abs(lateMins)}m ahead`;
                       else statusSubtext = 'On time';
                     }
@@ -490,7 +490,7 @@ export default function RouteView() {
                       {/* Left: Time */}
                       <div className="ios-time-col">
                         <div className="ios-sched-time">{scheduled}</div>
-                        {isVisited || isOnline ? (
+                        {isVisited || isOnline || (lateMins != null && (tripStatus === 'active' || tripStatus === 'connecting')) ? (
                           <div className={`ios-live-time ${delayType === 'late' ? 'ios-time-late' : ''}`}>
                             {displayTime}
                           </div>
