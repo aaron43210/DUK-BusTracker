@@ -204,16 +204,45 @@ function DeviceGate({ children }) {
   return children;
 }
 
+// ── Splash Gate (Initial App Load) ─────────────────────────────────────────
+function SplashGate({ children }) {
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    // Show splash screen for 2.5 seconds on initial load
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (showSplash) {
+    return (
+      <div className="splash-screen">
+        <div className="splash-overlay" />
+        <div className="splash-content">
+          <div className="splash-loader"></div>
+          <div className="splash-text">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return children;
+}
+
 // ── Root ───────────────────────────────────────────────────────────────────
 export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <DeviceGate>
-          <NetworkGate>
-            <AppShell />
-          </NetworkGate>
-        </DeviceGate>
+        <SplashGate>
+          <DeviceGate>
+            <NetworkGate>
+              <AppShell />
+            </NetworkGate>
+          </DeviceGate>
+        </SplashGate>
       </ToastProvider>
     </BrowserRouter>
   );
