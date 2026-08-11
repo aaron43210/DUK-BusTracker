@@ -227,8 +227,9 @@ export default function RouteView() {
   const isOnline = isActive;
 
   // Build timeline from stops + visit history
-  const visitedStops = routeHistory?.visitedStops || {};
-  const arrivalTimes = routeHistory?.arrivalTimes || {};
+  // Only show visited data when a trip is actively running to avoid stale morning data showing all afternoon
+  const visitedStops = isActive ? (routeHistory?.visitedStops || {}) : {};
+  const arrivalTimes = isActive ? (routeHistory?.arrivalTimes || {}) : {};
 
   // Filter to only morning or evening stops based on current direction
   const stopsToShow = stops.filter(s =>
@@ -252,7 +253,8 @@ export default function RouteView() {
 
   // Stats text
   const etaText = eta?.eta_minutes != null ? `${Math.round(eta.eta_minutes)} min` : '—';
-  const speedText = busPosition?.speed_kmh != null ? `${Math.round(busPosition.speed_kmh)} km/h` : '—';
+  const speedText = (busIsLive && busPosition?.speed_kmh != null)
+    ? `${Math.round(busPosition.speed_kmh)} km/h` : '—';
   const stopsDoneText = `${visitedCount}/${stopsToShow.length}`;
 
   // Timeline empty state message
