@@ -57,11 +57,11 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
     </p>
 
     <!-- OTP Box -->
-    <div style="background:#f8f9fa; border:1px solid #e2e8f0; border-left:4px solid #087cff; border-radius:6px;
-                padding:20px 32px; margin:0 0 24px; display:inline-block; min-width:180px; text-align:center;">
-        <span style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                     font-size:36px; font-weight:800; letter-spacing:14px; color:#0f172a;
-                     user-select:all; -webkit-user-select:all; margin-left: 14px;">
+    <div style="background:#f9f9f9; border:1px solid #dddddd; border-radius:8px;
+                padding:16px 24px; margin:0 0 24px; display:inline-block; min-width:180px; text-align:center;">
+        <span style="font-family: 'Courier New', Courier, monospace;
+                     font-size:32px; font-weight:700; letter-spacing:8px; color:#111111;
+                     user-select:all; -webkit-user-select:all;">
           {otp}
         </span>
     </div>
