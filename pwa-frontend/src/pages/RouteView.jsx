@@ -552,15 +552,16 @@ export default function RouteView() {
           </div>)}
 
           {/* Live Map section header — hidden in idle mode */}
+          {/* Live Map section header — hidden in idle mode */}
           {!isIdleMode && (
-          <div className="ios-section-header-row">
-            <div className="ios-section-title">Live Map</div>
-            {busPosition?.server_time && (
-              <div className="ios-last-updated">
-                Last updated: {formatLastUpdated(busPosition.server_time)}
-              </div>
-            )}
-          </div>
+            <div className="ios-section-header-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              {busPosition?.server_time ? (
+                <div className="ios-last-updated" style={{ margin: 0 }}>
+                  Last updated: {formatLastUpdated(busPosition.server_time)}
+                </div>
+              ) : <div />}
+              <div className="ios-section-title" style={{ textAlign: 'right', margin: 0 }}>Live Map</div>
+            </div>
           )}
 
           <div className={isIdleMode ? 'ios-map-card ios-map-card--idle' : 'ios-map-card'} onClick={() => navigate('/map')}>
