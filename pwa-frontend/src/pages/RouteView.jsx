@@ -4,7 +4,7 @@
  * Mirrors RouteViewScreen.tsx from the React Native app exactly.
  */
 import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import NotificationDrawer from '../components/NotificationDrawer';
@@ -396,9 +396,12 @@ export default function RouteView() {
     return nextTripTime ? `Not in Service • Next Trip: ${nextTripTime}` : 'Not in Service';
   };
 
+  const location = useLocation();
+  const showLoadingSpinner = location.state?.showLoadingSpinner === true;
+
   // ── Render ───────────────────────────────────────────────────────────────
   
-  if (loading && routeViewLoadedOnce) {
+  if (loading && showLoadingSpinner) {
     return (
       <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
         <TopBar onHamburger={() => setDrawerOpen(true)} />

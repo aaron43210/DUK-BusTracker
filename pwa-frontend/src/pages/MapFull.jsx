@@ -19,34 +19,34 @@ import {
 } from '../timetable';
 
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
-const POLL_MS   = 1500;
+const POLL_MS = 1500;
 const DEFAULT_CENTER = [76.848, 8.583];
-const DEFAULT_ZOOM   = 13;
+const DEFAULT_ZOOM = 13;
 
 export default function MapFull() {
-  const navigate        = useNavigate();
-  const mapContainer    = useRef(null);
-  const mapRef          = useRef(null);
-  const mapReadyRef     = useRef(false);
-  const busMarkerRef    = useRef(null);
-  const currentPosRef   = useRef(null);
-  const intervalRef     = useRef(null);
+  const navigate = useNavigate();
+  const mapContainer = useRef(null);
+  const mapRef = useRef(null);
+  const mapReadyRef = useRef(false);
+  const busMarkerRef = useRef(null);
+  const currentPosRef = useRef(null);
+  const intervalRef = useRef(null);
   const animIntervalRef = useRef(null);
-  const cameraLocked    = useRef(true); // auto-center on bus
+  const cameraLocked = useRef(true); // auto-center on bus
   const initialCentered = useRef(false);
 
-  const [drawerOpen,    setDrawerOpen]    = useState(false);
-  const [tripState,     setTripState]     = useState(null);
-  const [busPosition,   setBusPosition]   = useState(null);
-  const [stops,         setStops]         = useState([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [tripState, setTripState] = useState(null);
+  const [busPosition, setBusPosition] = useState(null);
+  const [stops, setStops] = useState([]);
   const [plannedCoords, setPlannedCoords] = useState([]);
-  const [trailCoords,   setTrailCoords]   = useState([]);
-  const [animatedBus,   setAnimatedBus]   = useState(null);
-  const [selectedStop,  setSelectedStop]  = useState(null);
-  const [eta,           setEta]           = useState(null);
-  const [loading,       setLoading]       = useState(true);
-  const [autoCenter,    setAutoCenter]    = useState(true);
-  const [is3D,          setIs3D]          = useState(false);
+  const [trailCoords, setTrailCoords] = useState([]);
+  const [animatedBus, setAnimatedBus] = useState(null);
+  const [selectedStop, setSelectedStop] = useState(null);
+  const [eta, setEta] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [autoCenter, setAutoCenter] = useState(true);
+  const [is3D, setIs3D] = useState(false);
 
   const user = getUser();
 
@@ -56,11 +56,11 @@ export default function MapFull() {
 
     const map = new maplibregl.Map({
       container: mapContainer.current,
-      style:     MAP_STYLE,
-      center:    DEFAULT_CENTER,
-      zoom:      DEFAULT_ZOOM,
-      minZoom:   6,
-      maxZoom:   18,
+      style: MAP_STYLE,
+      center: DEFAULT_CENTER,
+      zoom: DEFAULT_ZOOM,
+      minZoom: 6,
+      maxZoom: 18,
       maxBounds: [
         [73.50, 7.50],  // Southwest: South of Kanyakumari / Lakshadweep Sea
         [84.50, 19.50]  // Northeast: North of Telangana & Andhra Pradesh
@@ -199,7 +199,7 @@ export default function MapFull() {
     try {
       const seg = await getRouteSegment(startLat, startLon, targetLat, targetLon);
       if (seg?.coordinates?.length > 1) poly = seg.coordinates;
-    } catch (_) {}
+    } catch (_) { }
 
     if (animIntervalRef.current) clearInterval(animIntervalRef.current);
     const steps = Math.min(poly.length, 10);
@@ -224,9 +224,9 @@ export default function MapFull() {
         getTripState(), getLatestGps(), getRouteHistory(), getStops(),
       ]);
 
-      const trip    = tripRes.status === 'fulfilled' ? tripRes.value    : null;
-      const bus     = busRes.status  === 'fulfilled' ? busRes.value     : null;
-      const history = histRes.status === 'fulfilled' ? histRes.value    : null;
+      const trip = tripRes.status === 'fulfilled' ? tripRes.value : null;
+      const bus = busRes.status === 'fulfilled' ? busRes.value : null;
+      const history = histRes.status === 'fulfilled' ? histRes.value : null;
       const fetchedStops = stopsRes.status === 'fulfilled' ? stopsRes.value : [];
 
       setTripState(trip);
@@ -255,7 +255,7 @@ export default function MapFull() {
 
       const boardingId = user?.boarding_stop_id;
       if (boardingId && bus?.is_live) {
-        getEta(boardingId).then(setEta).catch(() => {});
+        getEta(boardingId).then(setEta).catch(() => { });
       }
 
       // Planned geometry (once)
@@ -263,7 +263,7 @@ export default function MapFull() {
         try {
           const geo = await getRouteGeometry();
           if (geo?.coordinates?.length) setPlannedCoords(geo.coordinates);
-        } catch (_) {}
+        } catch (_) { }
       }
 
       const trail = history?.coords?.length
@@ -308,7 +308,7 @@ export default function MapFull() {
       mapRef.current?.easeTo({ center: vp.center, zoom: vp.zoom, duration: 600 });
     }
   };
-  const zoomIn  = () => mapRef.current?.zoomIn({ duration: 300 });
+  const zoomIn = () => mapRef.current?.zoomIn({ duration: 300 });
   const zoomOut = () => mapRef.current?.zoomOut({ duration: 300 });
 
   const toggle3D = () => {
@@ -325,7 +325,7 @@ export default function MapFull() {
   const tripName = (typeof tripState?.trip === 'string' ? tripState.trip : '').toLowerCase();
   const direction = tripName.includes('morning') ? 'forward'
     : tripName.includes('evening') ? 'reverse'
-    : new Date().getHours() >= 14 ? 'reverse' : 'forward';
+      : new Date().getHours() >= 14 ? 'reverse' : 'forward';
 
   const StopCard = ({ stop }) => {
     const distKm = animatedBus && stop.lat && stop.lon
@@ -372,7 +372,7 @@ export default function MapFull() {
     <div className="map-full" style={{ position: 'absolute', inset: 0 }}>
       <TopBar
         showBack
-        onBack={() => navigate('/route')}
+        onBack={() => navigate('/route', { state: { showLoadingSpinner: true } })}
         title="Live Map"
         onHamburger={() => setDrawerOpen(true)}
       />
@@ -414,10 +414,10 @@ export default function MapFull() {
           <Minus size={20} color="#1f2937" />
         </button>
         <div className="map-ctrl-divider" />
-        <button 
-          className="map-ctrl-btn" 
-          onClick={toggle3D} 
-          title="Toggle 3D View" 
+        <button
+          className="map-ctrl-btn"
+          onClick={toggle3D}
+          title="Toggle 3D View"
           id="map-3d"
           style={{ fontWeight: '800', fontSize: '13px', color: is3D ? '#2563eb' : '#1f2937' }}
         >
