@@ -350,22 +350,24 @@ export default function RouteView() {
     }
     if (tripName.includes('morning')) {
       const lateTag = lateMins > 2
-        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> • Delayed by {lateMins} mins</span>
+        ? <div style={{ color: '#dc2626', fontWeight: 700, marginTop: '4px' }}>Delayed by {lateMins} mins</div>
         : null;
       return (
-        <span>
-          <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Morning Trip</span> → Digital University Kerala{lateTag}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span><span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Morning Trip</span> → Digital University Kerala</span>
+          {lateTag}
+        </div>
       );
     }
     if (tripName.includes('evening')) {
       const lateTag = lateMins > 2
-        ? <span style={{ color: '#dc2626', fontWeight: 700 }}> • Delayed by {lateMins} mins</span>
+        ? <div style={{ color: '#dc2626', fontWeight: 700, marginTop: '4px' }}>Delayed by {lateMins} mins</div>
         : null;
       return (
-        <span>
-          <span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Evening Trip</span> → Central Polytechnic{lateTag}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span><span style={{ color: 'var(--mint-deeper, #059669)', fontWeight: 700 }}>Evening Trip</span> → Central Polytechnic</span>
+          {lateTag}
+        </div>
       );
     }
     if (tripName.includes('unscheduled')) {
