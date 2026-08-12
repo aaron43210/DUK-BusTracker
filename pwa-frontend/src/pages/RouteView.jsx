@@ -44,6 +44,8 @@ function NextStopBanner({ tripState, nextStop }) {
   return <div className="map-next-stop-pill map-next-stop-pill--offline">Not in Service</div>;
 }
 
+let routeViewLoadedOnce = false;
+
 export default function RouteView() {
   const navigate = useNavigate();
   const { setSplashReady } = useContext(SplashContext);
@@ -203,6 +205,7 @@ export default function RouteView() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      routeViewLoadedOnce = true;
       if (!hasLoadedInitial.current) {
         hasLoadedInitial.current = true;
         setSplashReady();
@@ -395,7 +398,7 @@ export default function RouteView() {
 
   // ── Render ───────────────────────────────────────────────────────────────
   
-  if (loading) {
+  if (loading && routeViewLoadedOnce) {
     return (
       <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
         <TopBar onHamburger={() => setDrawerOpen(true)} />
