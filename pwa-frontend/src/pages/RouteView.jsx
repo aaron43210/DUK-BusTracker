@@ -394,6 +394,18 @@ export default function RouteView() {
   };
 
   // ── Render ───────────────────────────────────────────────────────────────
+  
+  if (loading) {
+    return (
+      <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
+        <TopBar onHamburger={() => setDrawerOpen(true)} />
+        <div className="spinner-screen">
+          <div className="spinner" />
+          <span className="spinner-label">Loading tracker…</span>
+        </div>
+      </div>
+    );
+  }
 
 
   return (
