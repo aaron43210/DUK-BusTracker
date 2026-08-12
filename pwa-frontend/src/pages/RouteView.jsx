@@ -239,16 +239,9 @@ export default function RouteView() {
   const isUnscheduled = tripName.includes('unscheduled');
 
   // ── Idle mode detection ───────────────────────────────────────────────────
-  // Idle = no useful timeline to show. Covers:
-  //   1. Post-evening (after 8:30 PM) / overnight (before 6:00 AM)
-  //   2. Midday gap between morning end and 5 PM, when morning trip is completed
-  //   3. Unscheduled trips (bus is moving but not on a known route)
-  const _now       = new Date();
-  const _timeMins  = _now.getHours() * 60 + _now.getMinutes();
-  const _isNight   = _timeMins >= 1230 || _timeMins < 360;   // after 8:30 PM or before 6 AM
-  const _isMidDay  = _timeMins >= 660  && _timeMins < 1020;  // 11 AM – 5 PM
-  const isIdleMode = isUnscheduled
-    || (!isActive && (_isNight || (_isMidDay && tripStatus === 'completed')));
+  // Idle = no useful timeline to show. 
+  // We rely on the backend's `tripStatus` which already accounts for dead hours, weekends, etc.
+  const isIdleMode = isUnscheduled || ['offline', 'completed', 'weekend', 'idle'].includes(tripStatus);
 
   // Build timeline from stops + visit history
   // Only show visited data when a trip is actively running to avoid stale morning data showing all afternoon
@@ -286,10 +279,10 @@ export default function RouteView() {
   let stopProgress = 0;
   if (isActive && animatedBus && currentNextIdx > 0) {
     const fromStop = stopsToShow[currentNextIdx - 1];
-    const toStop   = stopsToShow[currentNextIdx];
+    const toStop = stopsToShow[currentNextIdx];
     if (fromStop?.lat && fromStop?.lon && toStop?.lat && toStop?.lon) {
       // Bug 5 fix: haversineDistKm signature is (lon1, lat1, lon2, lat2)
-      const totalDist   = haversineDistKm(fromStop.lon, fromStop.lat, toStop.lon, toStop.lat);
+      const totalDist = haversineDistKm(fromStop.lon, fromStop.lat, toStop.lon, toStop.lat);
       const coveredDist = haversineDistKm(fromStop.lon, fromStop.lat, animatedBus[0], animatedBus[1]);
       stopProgress = totalDist > 0.001 ? Math.min(1, Math.max(0, coveredDist / totalDist)) : 0;
     }
@@ -308,8 +301,8 @@ export default function RouteView() {
   const markerLabel = isActive && !tripName.includes('unscheduled') && nextStop
     ? `Heading to ${nextStop.name}`
     : isActive && tripName.includes('unscheduled')
-    ? 'Unscheduled'
-    : 'Not in Service';
+      ? 'Unscheduled'
+      : 'Not in Service';
 
   // Stats text
   // ETA: guard on status==='passed' (bus already past boarding stop) — show '—' not stale minutes
@@ -400,7 +393,7 @@ export default function RouteView() {
   const showLoadingSpinner = location.state?.showLoadingSpinner === true;
 
   // ── Render ───────────────────────────────────────────────────────────────
-  
+
   if (loading && showLoadingSpinner) {
     return (
       <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
@@ -437,22 +430,22 @@ export default function RouteView() {
 
           {/* Stats Card — hidden in idle mode */}
           {!isIdleMode && (
-          <div className="ios-stats-card">
-            <div className="ios-stat-item">
-              <div className="ios-stat-value">{etaText}</div>
-              <div className="ios-stat-label">TO YOUR STOP</div>
+            <div className="ios-stats-card">
+              <div className="ios-stat-item">
+                <div className="ios-stat-value">{etaText}</div>
+                <div className="ios-stat-label">TO YOUR STOP</div>
+              </div>
+              <div className="ios-stat-divider" />
+              <div className="ios-stat-item">
+                <div className="ios-stat-value">{speedText}</div>
+                <div className="ios-stat-label">SPEED</div>
+              </div>
+              <div className="ios-stat-divider" />
+              <div className="ios-stat-item">
+                <div className="ios-stat-value">{stopsDoneText}</div>
+                <div className="ios-stat-label">STOPS</div>
+              </div>
             </div>
-            <div className="ios-stat-divider" />
-            <div className="ios-stat-item">
-              <div className="ios-stat-value">{speedText}</div>
-              <div className="ios-stat-label">SPEED</div>
-            </div>
-            <div className="ios-stat-divider" />
-            <div className="ios-stat-item">
-              <div className="ios-stat-value">{stopsDoneText}</div>
-              <div className="ios-stat-label">STOPS</div>
-            </div>
-          </div>
           )}
 
           {/* Stop Timeline — replaced by animated bus in idle mode */}
