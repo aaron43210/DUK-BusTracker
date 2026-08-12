@@ -3,7 +3,7 @@
  * Home screen: live trip status, stop timeline, stats, mini-map.
  * Mirrors RouteViewScreen.tsx from the React Native app exactly.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
@@ -18,6 +18,8 @@ import {
   getDelayBadge, computeEstimatedTime, getMapViewport,
   haversineDistKm, todayStr, parseTimeToMinutes,
 } from '../timetable';
+
+import { SplashContext } from '../App';
 
 const POLL_MS = 2500;
 
@@ -44,6 +46,7 @@ function NextStopBanner({ tripState, nextStop }) {
 
 export default function RouteView() {
   const navigate = useNavigate();
+  const { setSplashReady } = useContext(SplashContext);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -200,8 +203,12 @@ export default function RouteView() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      if (!hasLoadedInitial.current) {
+        hasLoadedInitial.current = true;
+        setSplashReady();
+      }
     }
-  }, [animateBusTo, plannedCoords.length]);
+  }, [animateBusTo, plannedCoords.length, setSplashReady]);
 
   // Initial load + polling
   useEffect(() => {
@@ -387,17 +394,7 @@ export default function RouteView() {
   };
 
   // ── Render ───────────────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
-        <TopBar onHamburger={() => setDrawerOpen(true)} />
-        <div className="spinner-screen">
-          <div className="spinner" />
-          <span className="spinner-label">Loading tracker…</span>
-        </div>
-      </div>
-    );
-  }
+
 
   return (
     <>
