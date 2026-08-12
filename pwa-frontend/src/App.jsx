@@ -15,10 +15,10 @@ import { getToken } from './storage';
 import { ToastContainer } from './components/Toast';
 
 import ProfileSetup from './pages/ProfileSetup';
-import OtpVerify    from './pages/OtpVerify';
-import RouteView    from './pages/RouteView';
-import MapFull      from './pages/MapFull';
-import Settings     from './pages/Settings';
+import OtpVerify from './pages/OtpVerify';
+import RouteView from './pages/RouteView';
+import MapFull from './pages/MapFull';
+import Settings from './pages/Settings';
 
 // ── Toast context ──────────────────────────────────────────────────────────
 export const ToastContext = createContext(null);
@@ -71,12 +71,12 @@ function NetworkGate({ children }) {
   const [offline, setOffline] = useState(!navigator.onLine);
 
   useEffect(() => {
-    const goOnline  = () => setOffline(false);
+    const goOnline = () => setOffline(false);
     const goOffline = () => setOffline(true);
-    window.addEventListener('online',  goOnline);
+    window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);
     return () => {
-      window.removeEventListener('online',  goOnline);
+      window.removeEventListener('online', goOnline);
       window.removeEventListener('offline', goOffline);
     };
   }, []);
@@ -122,26 +122,6 @@ function NetworkGate({ children }) {
   );
 }
 
-// ── App Shell wrapper ──────────────────────────────────────────────────────
-function AppShell() {
-  return (
-    <div className="app-shell">
-      <Routes>
-        {/* Public */}
-        <Route path="/" element={<RedirectIfAuthed><ProfileSetup /></RedirectIfAuthed>} />
-        <Route path="/otp" element={<OtpVerify />} />
-
-        {/* Protected */}
-        <Route path="/route"    element={<RequireAuth><RouteView /></RequireAuth>} />
-        <Route path="/map"      element={<RequireAuth><MapFull /></RequireAuth>} />
-        <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
-
-        {/* Fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </div>
-  );
-}
 
 // ── Device Gate (Blocks Android & enforces iOS PWA installation) ────────────
 function DeviceGate({ children }) {
@@ -150,7 +130,7 @@ function DeviceGate({ children }) {
   const isIos = /iPad|iPhone|iPod/.test(userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  
+
   if (isAndroid) {
     return (
       <div className="app-shell" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', background: '#fff' }}>
@@ -159,7 +139,7 @@ function DeviceGate({ children }) {
         <p style={{ color: '#666', fontSize: '15px', lineHeight: '1.5', marginBottom: '32px' }}>
           We noticed you're on an Android device. To get the best experience, please download our dedicated native Android app!
         </p>
-        <button 
+        <button
           style={{
             background: '#2563eb', color: '#fff', border: 'none', borderRadius: '12px',
             padding: '16px 24px', fontSize: '16px', fontWeight: '600', width: '100%'
@@ -179,7 +159,7 @@ function DeviceGate({ children }) {
         <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Mobile App Only</h2>
         <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.5', marginBottom: '32px' }}>
-          The Bus Tracker is only available as a mobile application.<br/><br/>
+          The Bus Tracker is only available as a mobile application.<br /><br />
           Please open this link on your <b>iPhone or iPad</b> to install it.
         </p>
       </div>
@@ -193,8 +173,8 @@ function DeviceGate({ children }) {
         <img src="/duk-logo.png" alt="DUK Logo" style={{ width: '280px', marginBottom: '24px', objectFit: 'contain' }} />
         <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '12px' }}>Install Required</h2>
         <p style={{ color: '#666', fontSize: '16px', lineHeight: '1.5', marginBottom: '32px' }}>
-          This app is designed to run natively on your iPhone. <br/><br/>
-          Tap the <b>Share</b> icon below and select <br/><b>"Add to Home Screen"</b> to use it.
+          This app is designed to run natively on your iPhone. <br /><br />
+          Tap the <b>Share</b> icon below and select <br /><b>"Add to Home Screen"</b> to use it.
         </p>
         <div style={{ fontSize: '40px', marginTop: '16px', animation: 'floatIn 1s infinite alternate' }}>👇</div>
       </div>
@@ -204,31 +184,66 @@ function DeviceGate({ children }) {
   return children;
 }
 
-// ── Splash Gate (Initial App Load) ─────────────────────────────────────────
-function SplashGate({ children }) {
+// ── Splash Context & Provider (Dynamic App Load) ─────────────────────────
+export const SplashContext = createContext({ setSplashReady: () => {}, isAppReady: false, showSplash: true });
+
+function SplashProvider({ children }) {
   const [showSplash, setShowSplash] = useState(true);
+  const [isAppReady, setIsAppReady] = useState(false);
+
+  const setSplashReady = () => {
+    setIsAppReady(true);
+    setTimeout(() => {
+      setShowSplash(false);
+    }, 500); // minimum display time
+  };
 
   useEffect(() => {
-    // Show splash screen for 2.5 seconds on initial load
-    const timer = setTimeout(() => {
+    const fallbackTimer = setTimeout(() => {
+      setIsAppReady(true);
       setShowSplash(false);
-    }, 2500);
-    return () => clearTimeout(timer);
+    }, 8000);
+    return () => clearTimeout(fallbackTimer);
   }, []);
 
-  if (showSplash) {
-    return (
-      <div className="splash-screen">
-        <div className="splash-overlay" />
-        <div className="splash-content">
-          <div className="splash-loader"></div>
-          <div className="splash-text">Loading...</div>
-        </div>
-      </div>
-    );
-  }
+  return (
+    <SplashContext.Provider value={{ setSplashReady, isAppReady, showSplash }}>
+      {children}
+    </SplashContext.Provider>
+  );
+}
 
-  return children;
+// ── App Shell wrapper ──────────────────────────────────────────────────────
+function AppShell() {
+  const { showSplash } = useContext(SplashContext);
+
+  return (
+    <div className="app-shell">
+      <Routes>
+        {/* Public */}
+        <Route path="/" element={<RedirectIfAuthed><ProfileSetup /></RedirectIfAuthed>} />
+        <Route path="/otp" element={<OtpVerify />} />
+
+        {/* Protected */}
+        <Route path="/route"    element={<RequireAuth><RouteView /></RequireAuth>} />
+        <Route path="/map"      element={<RequireAuth><MapFull /></RequireAuth>} />
+        <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+
+      {showSplash && (
+        <div className="splash-screen" style={{ position: 'absolute', inset: 0, zIndex: 99999 }}>
+          <div className="splash-overlay" />
+          <div className="splash-content">
+            <div className="splash-loader"></div>
+            <div className="splash-text">Loading...</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Root ───────────────────────────────────────────────────────────────────
@@ -236,13 +251,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <SplashGate>
+        <SplashProvider>
           <DeviceGate>
             <NetworkGate>
               <AppShell />
             </NetworkGate>
           </DeviceGate>
-        </SplashGate>
+        </SplashProvider>
       </ToastProvider>
     </BrowserRouter>
   );
