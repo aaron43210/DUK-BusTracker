@@ -5,26 +5,26 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User, MapPin, Bell, LogOut } from 'lucide-react';
-import TopBar      from '../components/TopBar';
-import DrawerMenu  from '../components/DrawerMenu';
+import TopBar from '../components/TopBar';
+import DrawerMenu from '../components/DrawerMenu';
 import { getUser, saveUser, clearSession } from '../storage';
 import { updatePreferences, getStops } from '../api';
 import { EMAIL_DOMAINS } from '../timetable';
 import { useToast } from '../App';
 
 export default function Settings() {
-  const navigate  = useNavigate();
+  const navigate = useNavigate();
   const showToast = useToast();
 
-  const [drawerOpen,    setDrawerOpen]    = useState(false);
-  const [user,          setUser]          = useState(null);
-  const [stops,         setStops]         = useState([]);
-  const [notifEnabled,  setNotifEnabled]  = useState(false);
-  const [alertEnabled,  setAlertEnabled]  = useState(false);
-  const [alertType,     setAlertType]     = useState('time');
-  const [alertValue,    setAlertValue]    = useState(5);
-  const [saving,        setSaving]        = useState(false);
-  const [boardingEdit,  setBoardingEdit]  = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [user, setUser] = useState(null);
+  const [stops, setStops] = useState([]);
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [alertEnabled, setAlertEnabled] = useState(false);
+  const [alertType, setAlertType] = useState('time');
+  const [alertValue, setAlertValue] = useState(5);
+  const [saving, setSaving] = useState(false);
+  const [boardingEdit, setBoardingEdit] = useState(false);
 
   useEffect(() => {
     const u = getUser();
@@ -32,7 +32,7 @@ export default function Settings() {
     // Fetch live stops
     getStops()
       .then(data => { if (Array.isArray(data) && data.length) setStops(data); })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   const currentStopName = stops.find(s => s.id === user?.boarding_stop_id)?.name || '—';
@@ -69,8 +69,8 @@ export default function Settings() {
     try {
       await updatePreferences({
         proximity_alert_enabled: val,
-        proximity_alert_type:    alertType,
-        proximity_alert_value:   alertValue,
+        proximity_alert_type: alertType,
+        proximity_alert_value: alertValue,
       });
       showToast(val ? 'Proximity alert enabled' : 'Proximity alert disabled', 'success');
     } catch {

@@ -1,11 +1,15 @@
 /**
  * TopBar.jsx — DUK Bus Tracker PWA
- * Header bar with hamburger menu, title, and optional action button.
+ * Header bar with hamburger menu, logos, and notification bell with unread badge.
  */
 import React from 'react';
-import { Menu, ArrowLeft, RefreshCw, Bell } from 'lucide-react';
+import { Menu, ArrowLeft, Bell } from 'lucide-react';
+import { useNotifications } from '../App';
 
-export default function TopBar({ onHamburger, title = 'DUK Bus Tracker', onBack, onRefresh, onNotification, showBack = false }) {
+export default function TopBar({ onHamburger, onBack, onNotification, showBack = false }) {
+  const { notifications } = useNotifications();
+  const unreadCount = notifications.length;
+
   return (
     <header className="topbar">
       <div className="topbar__left">
@@ -27,8 +31,18 @@ export default function TopBar({ onHamburger, title = 'DUK Bus Tracker', onBack,
 
       <div className="topbar__right">
         {onNotification && (
-          <button className="topbar__icon-btn" onClick={onNotification} aria-label="View notifications">
+          <button
+            className="topbar__icon-btn topbar__bell-btn"
+            onClick={onNotification}
+            aria-label={`View notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+            style={{ position: 'relative' }}
+          >
             <Bell size={24} />
+            {unreadCount > 0 && (
+              <span className="topbar__notif-badge" aria-hidden="true">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </button>
         )}
       </div>

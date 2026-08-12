@@ -23,6 +23,7 @@ import Colors from '../theme/colors';
 import TopBar from '../components/TopBar';
 import { authApi } from '../services/api';
 import { saveToken, saveUser } from '../services/storage';
+import { registerForPushNotificationsAsync } from '../services/firebaseService';
 
 const CODE_LENGTH = 6;
 
@@ -108,6 +109,9 @@ export default function OtpVerifyScreen({ navigation, route }: any) {
         email:           user.email,
         boarding_stop_id: user.boarding_stop_id ?? boardingPoint?.id ?? null,
       });
+
+      // Register device for push notifications
+      registerForPushNotificationsAsync().catch(() => {});
 
       setVerified(true);
       Animated.spring(successScale, {

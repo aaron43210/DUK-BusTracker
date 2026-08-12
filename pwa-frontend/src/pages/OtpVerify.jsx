@@ -11,6 +11,7 @@ import { setApiToken } from '../api';
 import { saveToken, saveUser } from '../storage';
 import { useToast } from '../App';
 import TopBar from '../components/TopBar';
+import { requestAndSaveFcmToken } from '../firebase';
 
 const CODE_LENGTH = 6;
 
@@ -98,6 +99,9 @@ export default function OtpVerify() {
       setApiToken(res.access_token);
       saveToken(res.access_token);
       saveUser(res.user);
+      // Request notification permission and register the FCM device token.
+      // Fire-and-forget: do not block the login flow.
+      requestAndSaveFcmToken().catch(() => {});
       setVerified(true);
     } catch (err) {
       setError(err.message || 'Invalid code. Try again.');

@@ -12,6 +12,7 @@ import MapFullScreen from './src/screens/MapFullScreen';
 
 import { getToken, getUser } from './src/services/storage';
 import { navigationRef, RootStackParamList } from './src/services/navigation';
+import { registerForegroundHandler } from './src/services/firebaseService';
 
 export type { RootStackParamList };
 
@@ -39,6 +40,12 @@ export default function App() {
         setLoading(false);
       }
     })();
+  }, []);
+
+  // ── Foreground FCM handler ───────────────────────────────────────────────
+  useEffect(() => {
+    const unsubscribe = registerForegroundHandler();
+    return unsubscribe;
   }, []);
 
   // Show a brief loading screen while we check storage

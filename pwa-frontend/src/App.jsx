@@ -2,7 +2,7 @@
  * App.jsx — DUK Bus Tracker PWA
  * Root component: Router, Auth gate, Toast context, Offline detection.
  */
-import React, { useState, useCallback, createContext, useContext, useEffect } from 'react';
+import React, { useState, useCallback, createContext, useContext, useEffect, useRef } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -13,6 +13,7 @@ import {
 
 import { getToken } from './storage';
 import { ToastContainer } from './components/Toast';
+import { refreshFcmToken, onForegroundMessage } from './firebase';
 
 import ProfileSetup from './pages/ProfileSetup';
 import OtpVerify from './pages/OtpVerify';
@@ -23,6 +24,10 @@ import Settings from './pages/Settings';
 // ── Toast context ──────────────────────────────────────────────────────────
 export const ToastContext = createContext(null);
 export function useToast() { return useContext(ToastContext); }
+
+// ── Notification context — live in-app push messages ───────────────────────
+export const NotificationContext = createContext({ notifications: [], addNotification: () => {}, clearNotifications: () => {} });
+export function useNotifications() { return useContext(NotificationContext); }
 
 function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
@@ -213,9 +218,40 @@ function SplashProvider({ children }) {
   );
 }
 
+// ── Notification Provider — wraps app and receives foreground FCM messages ─
+function NotificationProvider({ children }) {
+  const [notifications, setNotifications] = useState([]);
+
+  const addNotification = useCallback((notif) => {
+    setNotifications((prev) => [
+      { id: Date.now(), ...notif, time: new Date() },
+      ...prev,
+    ].slice(0, 50)); // keep max 50
+  }, []);
+
+  const clearNotifications = useCallback(() => setNotifications([]), []);
+
+  // Listen for foreground FCM messages and push them into the drawer
+  useEffect(() => {
+    const unsub = onForegroundMessage((msg) => addNotification(msg));
+    return unsub;
+  }, [addNotification]);
+
+  return (
+    <NotificationContext.Provider value={{ notifications, addNotification, clearNotifications }}>
+      {children}
+    </NotificationContext.Provider>
+  );
+}
+
 // ── App Shell wrapper ──────────────────────────────────────────────────────
 function AppShell() {
   const { showSplash } = useContext(SplashContext);
+
+  // Silently refresh the FCM device token on every app load
+  useEffect(() => {
+    if (getToken()) refreshFcmToken().catch(() => {});
+  }, []);
 
   return (
     <div className="app-shell">
@@ -251,13 +287,15 @@ export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <SplashProvider>
-          <DeviceGate>
-            <NetworkGate>
-              <AppShell />
-            </NetworkGate>
-          </DeviceGate>
-        </SplashProvider>
+        <NotificationProvider>
+          <SplashProvider>
+            <DeviceGate>
+              <NetworkGate>
+                <AppShell />
+              </NetworkGate>
+            </DeviceGate>
+          </SplashProvider>
+        </NotificationProvider>
       </ToastProvider>
     </BrowserRouter>
   );

@@ -3,17 +3,23 @@
  * Screen 1: Name + email + boarding stop selection.
  * Shows OTP modal as a popup on the same screen after submit.
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
 import { register, getStops } from '../api';
 import { EMAIL_DOMAINS } from '../timetable';
-import { useToast } from '../App';
+import { useToast, SplashContext } from '../App';
 import OtpModal from '../components/OtpModal';
 
 export default function ProfileSetup() {
   const navigate = useNavigate();
   const showToast = useToast();
+  const { setSplashReady } = useContext(SplashContext);
+
+  useEffect(() => {
+    // This page doesn't depend on async data for its initial render
+    setSplashReady();
+  }, [setSplashReady]);
 
   const [name, setName] = useState('');
   const [emailPrefix, setEmailPrefix] = useState('');
