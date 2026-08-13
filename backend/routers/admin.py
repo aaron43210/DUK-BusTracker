@@ -921,6 +921,7 @@ class BroadcastRequest(BaseModel):
     title:  str
     body:   str
     target: str = "all"
+    is_urgent: bool = False
 
 
 @router.post("/broadcast")
@@ -929,10 +930,30 @@ async def send_broadcast(
     db:    AsyncSession = Depends(get_db),
     _auth: None = Depends(require_admin),
 ):
-    result = await broadcast_to_all_users(db, req.title, req.body)
+    from models.notification import AdminBroadcast, InAppNotification
+    from models.user import User
+    
+    # 1. Send Push Notifications (urgent or non-urgent)
+    result = await broadcast_to_all_users(db, req.title, req.body, urgent=req.is_urgent)
 
+    # 2. Fan-out InAppNotifications to all verified users
+    users_query = await db.execute(select(User.id).where(User.verified.is_(True)))
+    user_ids = [row[0] for row in users_query.fetchall()]
+    
+    in_app_notifs = [
+        InAppNotification(
+            user_id=uid,
+            title=req.title,
+            body=req.body,
+            type='admin_broadcast'
+        ) for uid in user_ids
+    ]
+    db.add_all(in_app_notifs)
+
+    # 3. Log the broadcast
     log = AdminBroadcast(title=req.title, body=req.body, target=req.target, sent_count=result.get("sent", 0))
     db.add(log)
+    
     await db.commit()
     return {"success": True, **result}
 
@@ -992,11 +1013,32 @@ async def update_suggestion(
         
     await db.commit()
 
-    # Send push notification if a response is given and status is final-ish
-    if user and user.device_token and user.notifications_on and s.admin_response:
+    # Create In-App Notification if a response is given and status is final-ish
+    if user and s.admin_response:
+        from models.notification import InAppNotification
         title = "Response to your suggestion"
         body = f"Admin ({req.status}): {s.admin_response[:100]}..." if len(s.admin_response) > 100 else f"Admin ({req.status}): {s.admin_response}"
-        await send_push_notification([user.device_token], title, body, data={"type": "suggestion"})
+        
+        in_app_notif = InAppNotification(
+            user_id=user.id,
+            title=title,
+            body=body,
+            type='suggestion_response'
+        )
+        db.add(in_app_notif)
+        await db.commit()
+        
+        # Send live push notification so it appears in the app immediately
+        if user.notifications_on and user.device_token:
+            try:
+                await send_push_notification(
+                    device_tokens=[user.device_token],
+                    title=title,
+                    body=body,
+                    urgent=False
+                )
+            except Exception as e:
+                logger.error("[ADMIN] Failed to send push for suggestion response: %s", e)
         
     return {"success": True}
 

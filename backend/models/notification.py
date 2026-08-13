@@ -52,3 +52,19 @@ class Suggestion(Base):
     user_id        = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     status         = Column(String(30), default="pending")  # pending, approved, will_consider, rejected
     admin_response = Column(Text, nullable=True)
+
+
+class InAppNotification(Base):
+    """
+    Stores notifications that appear in the user's PWA notification drawer.
+    If user_id is NULL, it is a global broadcast visible to everyone.
+    """
+    __tablename__ = "in_app_notifications"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    title      = Column(String(200), nullable=False)
+    body       = Column(Text, nullable=False)
+    type       = Column(String(50), nullable=False) # e.g., 'suggestion_response', 'broadcast', 'info'
+    is_read    = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

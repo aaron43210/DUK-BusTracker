@@ -111,6 +111,51 @@ async def get_active_trip(db: AsyncSession, now_ist: datetime) -> Trip | None:
 
 # ── State transitions ──────────────────────────────────────────────────────────
 
+async def _notify_trip_started(trip_id: int, direction: str) -> None:
+    from database import AsyncSessionLocal
+    from models.user import User
+    from models.notification import InAppNotification
+    from services.firebase import send_push_notification
+
+    trip_name = "Morning" if direction in ("forward", "morning", "Morning") else "Evening"
+    title = f"{trip_name} Trip Started"
+    body = f"The {trip_name.lower()} trip bus has departed from the starting point."
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(User).where(User.verified.is_(True)))
+            users = result.scalars().all()
+
+            in_app_notifs = []
+            tokens = []
+            for u in users:
+                in_app_notifs.append(
+                    InAppNotification(
+                        user_id=u.id,
+                        title=title,
+                        body=body,
+                        type="trip_start"
+                    )
+                )
+                if u.notifications_on and u.device_token:
+                    tokens.append(u.device_token)
+
+            if in_app_notifs:
+                db.add_all(in_app_notifs)
+                await db.commit()
+
+            if tokens:
+                await send_push_notification(
+                    device_tokens=tokens,
+                    title=title,
+                    body=body,
+                    urgent=True
+                )
+                logger.info("[LIFECYCLE] Sent trip start push notification to %d devices", len(tokens))
+    except Exception as e:
+        logger.error("[LIFECYCLE] Failed to send trip start notifications: %s", e)
+
+
 async def _mark_on_trip(
     db: AsyncSession, trip: Trip, manager, now_utc: datetime
 ) -> None:
@@ -119,6 +164,9 @@ async def _mark_on_trip(
     reset_snap_state()
     await db.commit()
     logger.info("[LIFECYCLE] Trip #%d → on_trip", trip.id)
+    
+    asyncio.create_task(_notify_trip_started(trip.id, trip.direction))
+    
     await manager.broadcast({
         "type":      "trip_status",
         "trip_id":   trip.id,

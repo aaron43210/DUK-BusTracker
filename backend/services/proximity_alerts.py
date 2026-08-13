@@ -237,7 +237,7 @@ async def run_proximity_alerts(
             continue
         await send_push_notification(
             tokens,
-            "Bus Approaching! 🚌",
+            "Bus Approaching! ",
             f"The bus has reached {stop.name}, your boarding alert stop!",
             {"type": "proximity", "stop_id": str(stop_id), "trip_id": str(trip.id)},
         )
@@ -256,7 +256,7 @@ async def run_proximity_alerts(
             continue
         await send_push_notification(
             tokens,
-            "Destination Approaching! 🚌",
+            "Destination Approaching!",
             f"The bus has reached {stop.name}, your destination alert stop!",
             {"type": "proximity", "stop_id": str(stop_id), "trip_id": str(trip.id)},
         )

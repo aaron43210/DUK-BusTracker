@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="DUK Bus Tracker API",
-    version="2.0.0",
+    version="1.0.0",
     description="Real-time bus tracking for Digital University Kerala",
     lifespan=lifespan,
     docs_url="/api/docs",
@@ -130,6 +130,9 @@ app.include_router(auth.router)
 app.include_router(gps.router)
 app.include_router(tracking.router)
 app.include_router(admin.router)
+
+from routers import notifications
+app.include_router(notifications.router)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Bell, AlertTriangle, CheckCircle, Info, Trash2 } from 'lucide-react';
 import { useNotifications } from '../App';
-import { getMyNotifications } from '../api';
+import { getMyNotifications, markNotificationRead } from '../api';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,12 +45,20 @@ export default function NotificationDrawer({ isOpen, onClose }) {
     }
   });
 
-  const handleDismiss = (id) => {
+  const handleDismiss = async (id) => {
     setDismissedIds(prev => {
       const next = [...prev, id];
       localStorage.setItem('dismissed_notifications', JSON.stringify(next));
       return next;
     });
+    // If it's a numeric ID, it came from the backend database, so mark it read there
+    if (typeof id === 'number') {
+      try {
+        await markNotificationRead(id);
+      } catch (e) {
+        console.error('Failed to mark notification read', e);
+      }
+    }
   };
 
   useEffect(() => {
