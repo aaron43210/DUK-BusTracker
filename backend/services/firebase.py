@@ -10,15 +10,23 @@ from firebase_admin import credentials, messaging
 
 logger = logging.getLogger(__name__)
 
-# Initialize Firebase Admin SDK using the local service account JSON
+# Initialize Firebase Admin SDK using the local service account JSON or Environment Variable (for Railway)
 try:
+    cert_env = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
     cred_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-service-account.json')
-    if os.path.exists(cred_path):
+    
+    if cert_env:
+        import json
+        cert_dict = json.loads(cert_env)
+        cred = credentials.Certificate(cert_dict)
+        firebase_admin.initialize_app(cred)
+        logger.info("[FCM] Firebase Admin initialized from Environment Variable (Railway).")
+    elif os.path.exists(cred_path):
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
-        logger.info("[FCM] Firebase Admin initialized successfully.")
+        logger.info("[FCM] Firebase Admin initialized successfully from local file.")
     else:
-        logger.warning("[FCM] firebase-service-account.json not found. Push notifications will be disabled.")
+        logger.warning("[FCM] firebase-service-account.json or FIREBASE_SERVICE_ACCOUNT_JSON ENV not found. Push notifications disabled.")
 except Exception as e:
     logger.error("[FCM] Failed to initialize Firebase Admin: %s", e)
 
