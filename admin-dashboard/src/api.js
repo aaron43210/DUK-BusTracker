@@ -12,6 +12,12 @@
 // In production, the build process injects VITE_API_URL.
 const BASE = import.meta.env.VITE_API_URL || '';
 
+export function getWsBusUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = BASE ? BASE.replace(/^https?:\/\//, '') : window.location.host;
+  return `${protocol}//${host}/api/v1/ws/bus`;
+}
+
 // ── Internal: shared fetch wrapper ───────────────────────────────────────────
 // `token` — the admin token returned by /admin/api/login.
 // We keep it in module-level state so every api* call can use it.
@@ -109,6 +115,7 @@ export async function getTripState() {
 
 // getTripTrace: GET /api/v1/trip_trace/:trip_id
 export async function getTripTrace(tripId) {
+  if (!tripId) return apiFetch('/api/v1/current_trace');
   return apiFetch(`/api/v1/trip_trace/${tripId}`);
 }
 

@@ -11,8 +11,10 @@ import NotificationDrawer from '../components/NotificationDrawer';
 import BusMapView from '../components/BusMapView';
 import BusIdleAnimation from '../components/BusIdleAnimation';
 import {
-  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops,
+  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops, getWsBusUrl
 } from '../api';
+import GPSAnimator from '../utils/gpsAnimator';
+import TrailManager from '../utils/trailManager';
 import { getUser } from '../storage';
 import {
   getDelayBadge, computeEstimatedTime, getMapViewport,
@@ -21,7 +23,7 @@ import {
 
 import { SplashContext } from '../App';
 
-const POLL_MS = 2500;
+const POLL_MS = 15000;
 
 // ── Next Stop Banner — tiny pill above "Tap to view full map" ──────────
 function NextStopBanner({ tripState, nextStop }) {
@@ -57,6 +59,7 @@ export default function RouteView() {
   const [busPosition, setBusPosition] = useState(null);
   const [routeHistory, setRouteHistory] = useState(null);
   const [eta, setEta] = useState(null);
+  const [etaTargetStopId, setEtaTargetStopId] = useState(null);
   const [stops, setStops] = useState([]);
   const [plannedCoords, setPlannedCoords] = useState([]);
   const [trailCoords, setTrailCoords] = useState([]);
@@ -66,8 +69,14 @@ export default function RouteView() {
   const [error, setError] = useState('');
 
   const intervalRef = useRef(null);
-  const animIntervalRef = useRef(null);
-  const currentPosRef = useRef(null);
+  const animatorRef = useRef(null);
+  const trailManagerRef = useRef(null);
+  const wsRef = useRef(null);
+
+  // Initialize TrailManager
+  useEffect(() => {
+    trailManagerRef.current = new TrailManager(setTrailCoords);
+  }, []);
 
   // Load user
   useEffect(() => {
@@ -75,98 +84,94 @@ export default function RouteView() {
   }, []);
 
   // Animate bus smoothly between positions
-  const animateBusTo = useCallback(async (targetLat, targetLon) => {
-    const startPos = currentPosRef.current || [targetLon, targetLat];
-    const [startLon, startLat] = startPos;
-    const distKm = haversineDistKm(startLon, startLat, targetLon, targetLat);
-
-    if (!currentPosRef.current || distKm > 8.0) {
-      setAnimatedBus([targetLon, targetLat]);
-      currentPosRef.current = [targetLon, targetLat];
-      return;
-    }
-    if (distKm < 0.0005) {
-      setAnimatedBus([targetLon, targetLat]);
-      currentPosRef.current = [targetLon, targetLat];
-      return;
-    }
-
-    let polyline = [[startLon, startLat], [targetLon, targetLat]];
-    try {
-      const seg = await getRouteSegment(startLat, startLon, targetLat, targetLon);
-      if (seg?.coordinates?.length > 1) polyline = seg.coordinates;
-    } catch (_) { }
-
-    // Calculate cumulative distances for smooth interpolation
-    const cumDists = [0];
-    for (let i = 1; i < polyline.length; i++) {
-      cumDists.push(cumDists[i - 1] + haversineDistKm(polyline[i - 1][0], polyline[i - 1][1], polyline[i][0], polyline[i][1]));
-    }
-    const totalDist = cumDists[cumDists.length - 1];
-
-    if (totalDist <= 0.00001) {
-      setAnimatedBus([targetLon, targetLat]);
-      currentPosRef.current = [targetLon, targetLat];
-      return;
-    }
-
-    if (animIntervalRef.current) cancelAnimationFrame(animIntervalRef.current);
-
-    const duration = POLL_MS;
-    const startTime = performance.now();
-
-    const step = (now) => {
-      let progress = (now - startTime) / duration;
-      if (progress > 1.0) progress = 1.0;
-
-      const currentDist = progress * totalDist;
-      let segIdx = 0;
-      while (segIdx < cumDists.length - 2 && cumDists[segIdx + 1] < currentDist) {
-        segIdx++;
+  
+  // Initialize animator
+  useEffect(() => {
+    animatorRef.current = new GPSAnimator({
+      onPositionUpdate: (point) => {
+        setAnimatedBus(point);
+      },
+      segmentFetcher: async (lat1, lon1, lat2, lon2) => {
+        const seg = await getRouteSegment(lat1, lon1, lat2, lon2);
+        if (seg && seg.coordinates) {
+          return seg.coordinates;
+        }
+        return [];
       }
+    });
 
-      const p1 = polyline[segIdx];
-      const p2 = polyline[segIdx + 1];
-      const segSpan = (cumDists[segIdx + 1] - cumDists[segIdx]) || 0.00001;
-      const segFrac = Math.max(0, Math.min(1, (currentDist - cumDists[segIdx]) / segSpan));
+    return () => {
+      if (animatorRef.current) animatorRef.current.destroy();
+    };
+  }, []);
 
-      const curLon = p1[0] + (p2[0] - p1[0]) * segFrac;
-      const curLat = p1[1] + (p2[1] - p1[1]) * segFrac;
+  // Connect WebSocket
+  useEffect(() => {
+    let isMounted = true;
+    let ws = null;
+    let reconnectTimeout = null;
 
-      setAnimatedBus([curLon, curLat]);
-      currentPosRef.current = [curLon, curLat];
+    const connectWs = () => {
+      ws = new WebSocket(getWsBusUrl());
+      wsRef.current = ws;
 
-      if (progress < 1.0) {
-        animIntervalRef.current = requestAnimationFrame(step);
-      } else {
-        const finalPoint = polyline[polyline.length - 1];
-        setAnimatedBus(finalPoint);
-        currentPosRef.current = finalPoint;
-      }
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'gps' && animatorRef.current) {
+            animatorRef.current.pushPoint(msg.lat, msg.lon, msg.server_time);
+            setBusPosition((prev) => ({ ...prev, lat: msg.lat, lon: msg.lon, speed_kmh: msg.speed_kmh, is_live: true }));
+            
+            if (trailManagerRef.current) {
+              trailManagerRef.current.addLivePoint(msg.lat, msg.lon);
+            }
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        if (isMounted) {
+          reconnectTimeout = setTimeout(connectWs, 2000);
+        }
+      };
     };
 
-    animIntervalRef.current = requestAnimationFrame(step);
+    connectWs();
+
+    return () => {
+      isMounted = false;
+      if (ws) ws.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
   }, []);
+
 
   const fetchAll = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     setError('');
 
     try {
-      const [tripRes, busRes, histRes, stopsRes] = await Promise.allSettled([
-        getTripState(),
+      let trip = null;
+      try {
+        trip = await getTripState();
+      } catch (_) {}
+      
+      const [busRes, histRes, stopsRes] = await Promise.allSettled([
         getLatestGps(),
-        getRouteHistory(),
+        getRouteHistory(trip?.trip_id || null),
         getStops(),
       ]);
 
-      const trip = tripRes.status === 'fulfilled' ? tripRes.value : null;
       const bus = busRes.status === 'fulfilled' ? busRes.value : null;
       const history = histRes.status === 'fulfilled' ? histRes.value : null;
       const fetchedStops = stopsRes.status === 'fulfilled' ? stopsRes.value : [];
 
       setTripState(trip);
-      setBusPosition(bus);
+      if (bus && animatorRef.current && !busPosition) {
+        animatorRef.current.pushPoint(bus.lat, bus.lon, null);
+        setBusPosition(bus);
+      }
       setRouteHistory(history);
 
       // Only update stops when we get data — avoids blanking on network flap
@@ -174,17 +179,41 @@ export default function RouteView() {
         setStops(fetchedStops);
       }
 
-      if (bus?.lat && bus?.lon) {
-        await animateBusTo(bus.lat, bus.lon);
-      }
+      
 
-      // ETA to boarding stop
-      const boardingStopId = getUser()?.boarding_stop_id;
-      if (boardingStopId && bus?.is_live) {
-        try {
-          const etaRes = await getEta(boardingStopId);
-          setEta(etaRes);
-        } catch (_) { }
+      // Dynamic ETA Target (Morning = boarding stop, Evening = destination stop)
+      if (bus?.is_live) {
+        const isEvening = trip?.trip?.toLowerCase()?.includes('evening');
+        const primaryTargetId = isEvening ? getUser()?.destination_stop_id : getUser()?.boarding_stop_id;
+        
+        let finalEtaRes = null;
+        let usedTargetId = primaryTargetId;
+
+        if (primaryTargetId) {
+          try {
+            finalEtaRes = await getEta(primaryTargetId);
+          } catch (_) { }
+        }
+
+        // Fallback to final stop if passed or no target set
+        if (!finalEtaRes || finalEtaRes.status === 'passed' || finalEtaRes.status === 'deviated') {
+          if (fetchedStops && fetchedStops.length > 0) {
+            const orderedStops = isEvening ? [...fetchedStops].reverse() : fetchedStops;
+            const finalStop = orderedStops[orderedStops.length - 1];
+            if (finalStop && finalStop.id !== primaryTargetId) {
+               try {
+                 finalEtaRes = await getEta(finalStop.id);
+                 usedTargetId = finalStop.id;
+               } catch (_) { }
+            }
+          }
+        }
+        
+        setEta(finalEtaRes);
+        setEtaTargetStopId(usedTargetId);
+      } else {
+        setEta(null);
+        setEtaTargetStopId(null);
       }
 
       // Planned route geometry (only once)
@@ -195,9 +224,16 @@ export default function RouteView() {
         } catch (_) { }
       }
 
-      // Trail from route history
-      if (history?.coords?.length) {
-        setTrailCoords(history.coords.map(c => [c.lon, c.lat]));
+      // Trail from full trip trace (for all trips)
+      if (trip) {
+        if (trailManagerRef.current && trailManagerRef.current.tripId !== trip.trip_id) {
+          trailManagerRef.current.init(trip.trip_id);
+        }
+      } else {
+        if (trailManagerRef.current) {
+          trailManagerRef.current.clear();
+          trailManagerRef.current.tripId = null;
+        }
       }
 
     } catch (err) {
@@ -211,7 +247,7 @@ export default function RouteView() {
         setSplashReady();
       }
     }
-  }, [animateBusTo, plannedCoords.length, setSplashReady]);
+  }, [plannedCoords.length, setSplashReady, busPosition]);
 
   // Initial load + polling
   useEffect(() => {
@@ -219,7 +255,7 @@ export default function RouteView() {
     intervalRef.current = setInterval(() => fetchAll(false), POLL_MS);
     return () => {
       clearInterval(intervalRef.current);
-      cancelAnimationFrame(animIntervalRef.current);
+      
     };
   }, [fetchAll]);
 
@@ -232,7 +268,7 @@ export default function RouteView() {
 
   const lateMins = tripState?.late_by_minutes ?? null;
 
-  const tripStatus = tripState?.status ?? 'idle';
+  const tripStatus = tripState ? tripState.status : 'loading';
   const isActive = tripStatus === 'active';
   const busIsLive = busPosition?.is_live === true;
   const isOnline = isActive;
@@ -331,22 +367,15 @@ export default function RouteView() {
   const getSubtextStatus = () => {
     const status = tripState?.status ?? 'offline';
     const nextTripTime = tripState?.next_trip_time;
-
-    if (status === 'cancelled') {
-      return (
-        <span style={{ color: '#ef4444', fontWeight: 600 }}>
-          Trip Cancelled {tripState?.cancellation_reason ? `(${tripState.cancellation_reason})` : ''}
-        </span>
-      );
+    if (!isOnline && tripStatus !== 'connecting') {
+      const nextTime = tripState?.next_trip_time;
+      if (tripStatus === 'completed') return nextTime ? `Trip Completed • Next Trip: ${nextTime}` : 'Trip Completed';
+      return nextTime ? `Not in Service • Next Trip: ${nextTime}` : 'Not in Service';
     }
-    // 'connecting' state — fall through to show trip name below
-    if (tripName.includes('special')) {
-      return (
-        <span>
-          <span style={{ color: '#8b5cf6', fontWeight: 700 }}>Special Service</span> → {direction === 'forward' ? 'Digital University Kerala' : 'Central Polytechnic'}
-        </span>
-      );
+    if (tripStatus === 'connecting') {
+      return <span style={{ color: '#d97706', fontWeight: 700 }}>Connecting to Bus...</span>;
     }
+    
     if (tripName.includes('morning')) {
       const lateTag = lateMins > 2
         ? <div style={{ color: '#dc2626', fontWeight: 700, marginTop: '4px' }}>Delayed by {lateMins} mins</div>
@@ -372,15 +401,19 @@ export default function RouteView() {
     if (tripName.includes('unscheduled')) {
       return <span style={{ color: '#d97706', fontWeight: 700 }}>Unscheduled Trip (Live Tracking)</span>;
     }
+    if (tripStatus === 'cancelled') {
+      return (
+        <span style={{ color: '#ef4444', fontWeight: 600 }}>
+          Trip Cancelled {tripState?.cancellation_reason ? `(${tripState.cancellation_reason})` : ''}
+        </span>
+      );
+    }
     const isWeekend = [0, 6].includes(new Date().getDay()) || status === 'weekend';
     if (isWeekend) {
       return nextTripTime ? `Weekend (No Service) • Next Trip: ${nextTripTime}` : 'Weekend (No Service)';
     }
     if (status === 'waiting') {
       return nextTripTime ? `Waiting for Service • Next Trip: ${nextTripTime}` : 'Waiting for Service';
-    }
-    if (status === 'completed') {
-      return nextTripTime ? `Trip Completed • Next Trip: ${nextTripTime}` : 'Trip Completed';
     }
     return nextTripTime ? `Not in Service • Next Trip: ${nextTripTime}` : 'Not in Service';
   };
@@ -390,6 +423,7 @@ export default function RouteView() {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
+  
   if (loading && showLoadingSpinner) {
     return (
       <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
@@ -401,6 +435,20 @@ export default function RouteView() {
       </div>
     );
   }
+
+  if (loading && !tripState) {
+    return (
+      <>
+        <TopBar onHamburger={() => setDrawerOpen(true)} onNotification={() => setNotificationOpen(true)} />
+        <div className="route-view-ios">
+          <div className="route-view-ios__scroll" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+            <div className="spinner" style={{ width: 30, height: 30, borderTopColor: '#007AFF', borderWidth: 3 }} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
 
 
   return (
@@ -429,7 +477,11 @@ export default function RouteView() {
             <div className="ios-stats-card">
               <div className="ios-stat-item">
                 <div className="ios-stat-value">{etaText}</div>
-                <div className="ios-stat-label">TO YOUR STOP</div>
+                <div className="ios-stat-label">
+                  {etaTargetStopId 
+                    ? `TO ${stops.find(s => s.id === etaTargetStopId)?.name?.toUpperCase() || 'SAVED STOP'}`
+                    : 'TO SAVED STOP'}
+                </div>
               </div>
               <div className="ios-stat-divider" />
               <div className="ios-stat-item">
@@ -486,25 +538,28 @@ export default function RouteView() {
                     // Per-stop delay: compare actual arrival vs scheduled
                     if (actualTime && scheduled) {
                       const perStopDiff = parseTimeToMinutes(actualTime) - parseTimeToMinutes(scheduled);
+                      const action = idx === 0 ? 'Departed' : 'Arrived';
                       if (perStopDiff > 1) {
                         delayType = 'late';
-                        statusSubtext = `Arrived • +${perStopDiff}m late`;
+                        statusSubtext = `${action} • +${perStopDiff}m late`;
                       } else if (perStopDiff < -1) {
                         delayType = 'ahead';
-                        statusSubtext = `Arrived • ${Math.abs(perStopDiff)}m early`;
+                        statusSubtext = `${action} • ${Math.abs(perStopDiff)}m early`;
                       } else {
-                        statusSubtext = 'Arrived on time';
+                        statusSubtext = `${action} on time`;
                       }
                     } else {
-                      statusSubtext = 'Arrived';
+                      statusSubtext = idx === 0 ? 'Departed' : 'Arrived';
                     }
                   } else if (isOnline || (lateMins != null && (tripStatus === 'active' || tripStatus === 'connecting'))) {
                     if (lateMins > 1) delayType = 'late';
                     else if (lateMins < -1) delayType = 'ahead';
                     else delayType = 'ontime';
 
-                    if (isCurrent) {
+                    if (isCurrent && idx !== 0) {
                       statusSubtext = 'Next Stop';
+                    } else if (isCurrent && idx === 0) {
+                      statusSubtext = 'Scheduled';
                     } else {
                       if (delayType === 'late') statusSubtext = 'Delayed';
                       else if (delayType === 'ahead') statusSubtext = `${Math.abs(lateMins)}m ahead`;
@@ -530,7 +585,15 @@ export default function RouteView() {
                       <div className="ios-track-col">
                         <div className={`ios-track-dot ${isCurrent ? 'ios-track-dot-current' : ''} ${isVisited ? 'ios-track-dot-visited' : ''}`} />
                         {!isLast && (
-                          <div className={`ios-track-line ${isVisited ? 'ios-track-line-visited' : ''}`} />
+                          <div className={`ios-track-line ${stopsToShow[idx + 1]?.name in visitedStops ? 'ios-track-line-visited' : ''}`}>
+                            {isActive && anchorIdx === idx && stopProgress > 0 && !(stopsToShow[idx + 1]?.name in visitedStops) && (
+                              <div style={{
+                                position: 'absolute', top: 0, left: 0, right: 0,
+                                height: `${stopProgress * 100}%`,
+                                background: '#2563eb'
+                              }} />
+                            )}
+                          </div>
                         )}
                       </div>
 

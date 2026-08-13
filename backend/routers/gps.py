@@ -25,6 +25,8 @@ from models.gps import GpsLog
 from config import get_settings
 from services.trip_lifecycle import handle_power_on, handle_power_off, handle_gps_update
 from services.osrm_client import haversine_m_math, snap_live_gps
+from services.gps_filter import apply_gps_filter
+from services.live_cluster import apply_live_clustering
 
 logger   = logging.getLogger(__name__)
 settings = get_settings()
@@ -113,55 +115,53 @@ async def process_raw_payload(raw: str, db: AsyncSession, server_now: datetime) 
     )
     gps_time = datetime.fromisoformat(gps_time_str)
 
-    prev_res = await db.execute(
-        select(GpsLog).where(GpsLog.lat.isnot(None)).order_by(desc(GpsLog.id)).limit(1)
+    # ── Stage 1: Apply synchronous GPS filter (outlier + lock + EMA) ──────────
+    filtered_lat, filtered_lon, filter_info = apply_gps_filter(
+        raw_lat=lat,
+        raw_lon=lon,
+        speed_kmh=speed_kmh,
+        now=server_now,
     )
-    prev = prev_res.scalar_one_or_none()
+    
+    logger.debug(
+        "[GPS] Raw=(%.5f,%.5f) Filtered=(%.5f,%.5f) reason=%s",
+        lat, lon, filtered_lat, filtered_lon, filter_info.filter_reason,
+    )
 
-    if prev and prev.lat and prev.lon and speed_kmh is not None and speed_kmh < 1.0:
-        dist_m = haversine_m_math(prev.lat, prev.lon, lat, lon)
-        if dist_m < 10.0:  # Only suppress genuine stationary jitter (<10m at true standstill <1 km/h)
-            lat = prev.lat
-            lon = prev.lon
-    # ──────────────────────────────────────────────────────────────────────────
-    log = GpsLog(server_time=server_now, gps_time=gps_time, lat=lat, lon=lon, speed=speed_kmh)
+    # ── Stage 2: Synchronous OSRM Snap ──────────────────────────────────────────
+    # Snap ONCE, synchronously, before anything is broadcast or stored.
+    # Guarantees ordering and eliminates double-broadcast zigzag issues.
+    snapped_lat, snapped_lon = await snap_live_gps(filtered_lat, filtered_lon)
+
+    # ── Stage 3: Live Clustering ──────────────────────────────────────────────
+    output_lat, output_lon, should_broadcast = apply_live_clustering(snapped_lat, snapped_lon)
+
+    # ── Stage 4: Persist snapped & clustered coordinates ──────────────────────
+    log = GpsLog(
+        server_time=server_now,
+        gps_time=gps_time,
+        lat=output_lat,
+        lon=output_lon,
+        speed=speed_kmh,
+    )
     db.add(log)
 
     # Lifecycle: link log to active trip + detect movement / destination proximity
-    await handle_gps_update(db, manager, lat, lon, server_now, log)
-
+    await handle_gps_update(db, manager, output_lat, output_lon, server_now, log)
     await db.commit()
 
-    # Broadcast raw coordinates immediately — don't wait for OSRM snap
-    await manager.broadcast({
-        "type":        "gps",
-        "lat":         lat,
-        "lon":         lon,
-        "speed_kmh":   speed_kmh,
-        "server_time": server_now.isoformat(),
-    })
+    # ── Stage 5: Single Broadcast ─────────────────────────────────────────────
+    # ONE broadcast per ping. No follow-up correction message needed.
+    if should_broadcast:
+        await manager.broadcast({
+            "type":        "gps",
+            "lat":         output_lat,
+            "lon":         output_lon,
+            "speed_kmh":   speed_kmh,
+            "server_time": server_now.isoformat(),
+        })
 
-    # Snap to road asynchronously and send a correction frame if snapped coords differ
-    asyncio.create_task(_snap_and_correct(lat, lon, manager))
-
-    logger.debug("[GPS] Logged: %.5f, %.5f  speed=%.1f kmh", lat, lon, speed_kmh or 0)
-    return {"type": "gps", "lat": lat, "lon": lon}
-
-
-async def _snap_and_correct(lat: float, lon: float, mgr: "ConnectionManager") -> None:
-    """Background task: snap GPS to nearest road and broadcast a correction frame if it moved."""
-    try:
-        snapped_lat, snapped_lon = await snap_live_gps(lat, lon)
-        # Only broadcast correction if OSRM moved the point by more than 3m
-        dist_m = haversine_m_math(lat, lon, snapped_lat, snapped_lon)
-        if dist_m > 3.0:
-            await mgr.broadcast({
-                "type":    "gps_snap",
-                "lat":     snapped_lat,
-                "lon":     snapped_lon,
-            })
-    except Exception as e:
-        logger.debug("[GPS] Snap correction failed: %s", e)
+    return {"type": "gps", "lat": output_lat, "lon": output_lon}
 
 
 # ── Mobile app subscription (subscribe-only) ──────────────────────────────────

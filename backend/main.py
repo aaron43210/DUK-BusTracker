@@ -22,6 +22,7 @@ import models  # noqa: F401
 
 # Routers
 from routers import auth, gps, tracking, admin
+from services.live_gps_poller import live_gps_polling_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,11 +50,15 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE gps_realtime ADD COLUMN IF NOT EXISTS ist_time TIMESTAMP WITHOUT TIME ZONE;"))
         
         # Fix any incorrectly migrated historical data (the previous manual SQL shifted time backwards by 5.5 hours)
+        # FIX: Only back-fill rows where ist_time is genuinely NULL.
+        # Previously this ran a full-table UPDATE on every startup,
+        # which blocks for minutes on large tables.
         await conn.execute(text("""
             UPDATE gps_realtime
-            SET ist_time = created_at AT TIME ZONE 'Asia/Kolkata'
-            WHERE ist_time IS NULL OR ist_time != (created_at AT TIME ZONE 'Asia/Kolkata');
+               SET ist_time = created_at AT TIME ZONE 'Asia/Kolkata'
+             WHERE ist_time IS NULL;
         """))
+
     logger.info("[STARTUP] Database tables ensured.")
 
     # Start the background notification scheduler (fires deferred push notifications)
@@ -64,13 +69,18 @@ async def lifespan(app: FastAPI):
     ml_task = asyncio.create_task(ml_training_loop())
     logger.info("[STARTUP] Background ML training scheduler started.")
 
+    # Start the Live GPS poller (for direct-to-supabase architecture)
+    poller_task = asyncio.create_task(live_gps_polling_loop(gps.manager))
+    logger.info("[STARTUP] Background Live GPS poller started.")
+
     yield
 
     # Gracefully cancel the scheduler on shutdown
     scheduler_task.cancel()
     ml_task.cancel()
+    poller_task.cancel()
     try:
-        await asyncio.gather(scheduler_task, ml_task, return_exceptions=True)
+        await asyncio.gather(scheduler_task, ml_task, poller_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
     await engine.dispose()

@@ -12,7 +12,7 @@ from models.gps import GpsLog
 from models.route import BusStop, Route
 from models.trip import Trip
 from services.geofence import haversine_km, find_nearest_stop_math, get_stops_ahead, cluster_gps_points
-from services.osrm_client import get_osrm_route_geometry, get_osrm_segment_geometry, get_osrm_match_geometry, snap_live_gps, haversine_m_math
+from services.osrm_client import get_osrm_route_geometry, get_osrm_segment_geometry, snap_live_gps, haversine_m_math
 from services.eta_engine import predict_eta
 from services.trip_lifecycle import auto_complete_expired_trips
 from constants import (
@@ -64,6 +64,7 @@ async def _get_all_stops(db: AsyncSession) -> list[dict]:
     _STOPS_CACHE = [
         {
             "id":           s.id,
+            "route_id":     s.route_id,
             "name":         s.name,
             "lat":          s.lat,
             "lon":          s.lon,
@@ -77,56 +78,41 @@ async def _get_all_stops(db: AsyncSession) -> list[dict]:
 
 
 # ── Stateful filter for direct-to-supabase architectures ──
-# Module-level stationary lock for the /latest endpoint.
-# NOTE: Resets to None on every uvicorn --reload. This is acceptable — the
-# marker will momentarily snap back to raw GPS on reload, then re-lock within
-# the next 1-2 pings. A DB/Redis-backed value would be more robust in production.
-LAST_LOCKED_POS = None
+from services.gps_filter import apply_gps_filter, get_filter_state, reset_filter_state
 
 @router.get("/latest")
 async def get_latest(db: AsyncSession = Depends(get_db)):
-    """Latest GPS ping from the bus."""
-    global LAST_LOCKED_POS
+    """Latest GPS ping from the bus — filtered and road-snapped."""
     await auto_complete_expired_trips(db)
+    
+    # Fetch last 5 pings so we can compute implied speed for outlier detection
     result = await db.execute(
         select(GpsLog)
         .where(GpsLog.lat.isnot(None))
         .order_by(desc(GpsLog.id))
-        .limit(1)
+        .limit(5)
     )
-    log = result.scalar_one_or_none()
-    if not log:
+    logs = result.scalars().all()
+    
+    if not logs:
         raise HTTPException(status_code=404, detail="No GPS data yet")
 
+    latest = logs[0]
     now_utc = datetime.now(timezone.utc)
-    log_time = log.server_time
+    log_time = latest.server_time
     if log_time.tzinfo is None:
         log_time = log_time.replace(tzinfo=timezone.utc)
     is_live = (now_utc - log_time).total_seconds() <= 60
 
-    lat, lon = log.lat, log.lon
-
-    # Stationary jitter lock (since Arduino bypasses backend and inserts direct to Supabase)
-    if log.speed is not None and log.speed < 5.0:
-        if LAST_LOCKED_POS is None:
-            LAST_LOCKED_POS = {"lat": lat, "lon": lon}
-        else:
-            dist_m = haversine_m_math(LAST_LOCKED_POS["lat"], LAST_LOCKED_POS["lon"], lat, lon)
-            if dist_m < 25.0:
-                lat = LAST_LOCKED_POS["lat"]
-                lon = LAST_LOCKED_POS["lon"]
-            else:
-                LAST_LOCKED_POS = {"lat": lat, "lon": lon}
-    else:
-        LAST_LOCKED_POS = {"lat": lat, "lon": lon}
-
-    snapped_lat, snapped_lon = await snap_live_gps(lat, lon)
-
+    lat, lon = latest.lat, latest.lon
+    
     return {
-        "lat":         snapped_lat,
-        "lon":         snapped_lon,
-        "speed_kmh":   log.speed,
-        "server_time": log.ist_time.isoformat() if log.ist_time else log.server_time.isoformat() if log.server_time else None,
+        "lat":         lat,
+        "lon":         lon,
+        "raw_lat":     lat,            # Deprecated (raw not strictly needed here)
+        "raw_lon":     lon,
+        "speed_kmh":   latest.speed,
+        "server_time": latest.ist_time.isoformat() if latest.ist_time else log_time.isoformat(),
         "is_live":     is_live,
     }
 
@@ -149,10 +135,10 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
     """
     Returns current trip status based on active Trip records.
     Falls back to time-window logic if no Trip records exist.
-    If trip is active but GPS connection is lost (> 60s), returns status 'connecting'.
     """
     await auto_complete_expired_trips(db)
-    # Check GPS connectivity (ping within last 60 seconds)
+    
+    # Check GPS connectivity (ping within last 5 minutes to handle network drops)
     gps_res = await db.execute(
         select(GpsLog)
         .where(GpsLog.lat.isnot(None))
@@ -160,16 +146,26 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     latest_gps = gps_res.scalar_one_or_none()
+    
+    now_utc = datetime.now(timezone.utc)
+    log_time = None
     is_gps_alive = False
+    gps_dead_minutes = 999
+    
     if latest_gps and latest_gps.server_time:
-        now_utc = datetime.now(timezone.utc)
         log_time = latest_gps.server_time
         if log_time.tzinfo is None:
             log_time = log_time.replace(tzinfo=timezone.utc)
-        if (now_utc - log_time).total_seconds() <= 60:
+        gps_dead_minutes = (now_utc - log_time).total_seconds() / 60.0
+        # FIX: Increased from 60s to 300s (5 minutes) to handle brief network drops
+        if gps_dead_minutes <= 5.0:
             is_gps_alive = True
 
-    today = date.today()
+    # FIX: Use IST date instead of server-local date to correctly find today's trips
+    now_ist = datetime.now(timezone.utc) + IST_OFFSET
+    today = now_ist.date()
+    time_mins = now_ist.hour * 60 + now_ist.minute
+
     result = await db.execute(
         select(Trip)
         .where(Trip.date == today)
@@ -177,10 +173,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
         .limit(5)
     )
     trips = result.scalars().all()
-
-    # Compute IST time once — used throughout the function
-    now_ist   = datetime.now(timezone.utc) + IST_OFFSET
-    time_mins = now_ist.hour * 60 + now_ist.minute
 
     if trips:
         is_deviated = False
@@ -192,6 +184,10 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
 
         active = next((t for t in trips if t.status in ("on_trip", "active", "late")), None)
         if active:
+            # FIX: If trip is on_trip in DB, consider it active unless GPS dead > 30 mins
+            if active.status in ("on_trip", "active", "late") and gps_dead_minutes <= 30.0:
+                is_gps_alive = True  # Override strict ping check for active trips
+                
             target_status = active.status if active.status != "on_trip" else "active"
             if not is_gps_alive:
                 target_status = "connecting"
@@ -200,7 +196,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
             if is_deviated and target_status != "connecting":
                 target_status = "active"
                 
-            # Prefer admin-set late value; fall back to auto-computed schedule delay
             auto_late = _auto_late_minutes(active.direction, time_mins)
             late_val  = active.late_by_minutes if active.late_by_minutes is not None else auto_late
 
@@ -213,6 +208,7 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 "next_trip_time": None,
                 "is_deviated":    is_deviated,
             }
+            
         cancelled = next((t for t in trips if t.status == "cancelled"), None)
         if cancelled:
             return {
@@ -241,14 +237,10 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                     "next_trip_time": next_time
                 }
 
-        # If there is a scheduled trip today, prioritize it over the fallback logic.
-        # This properly supports weekend "Special Service" trips.
         scheduled_trips = [t for t in trips if t.status == "scheduled"]
         if scheduled_trips:
-            # Sort to process morning ('forward') before evening ('reverse')
             scheduled_trips.sort(key=lambda x: 0 if x.direction in ("forward", "morning", "Morning") else 1)
             target_trip = scheduled_trips[0]
-            
             is_morning = target_trip.direction in ("forward", "morning", "Morning")
             
             is_active_window = False
@@ -262,8 +254,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                 status = "connecting"
                 if is_gps_alive:
                     status = "active"
-
-                # Auto-compute delay even for scheduled-but-not-started trips
                 auto_late = _auto_late_minutes(target_trip.direction, time_mins)
                 return {
                     "trip": display_trip,
@@ -300,9 +290,7 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
                     "next_trip_time": "07:30 AM" if is_morning else "05:40 PM",
                 }
 
-    # Fallback: time-window logic (used for normal weekdays when no trips are in DB yet)
-
-    # Weekend (Saturday / Sunday) -> No regular service, next trip Monday morning
+    # Fallback: time-window logic
     if today.weekday() >= 5:
         return {
             "trip": "Unscheduled" if is_gps_alive else "Not in Service",
@@ -310,7 +298,6 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
             "next_trip_time": "Mon 07:30 AM",
         }
 
-    # Friday after evening commute -> Friday trip completed, next is Monday morning
     if today.weekday() == 4 and time_mins > EVENING_END_MINS:
         return {
             "trip": "Unscheduled" if is_gps_alive else "Not in Service",
@@ -322,55 +309,78 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
         dir_name = "Morning" if time_mins <= MORNING_END_MINS else "Evening"
         return {"trip": dir_name, "status": "active" if is_gps_alive else "connecting", "next_trip_time": None}
     
-    # If the bus is actively driving outside of scheduled hours, it's an unscheduled active trip
     if is_gps_alive:
         return {"trip": "Unscheduled", "status": "active", "next_trip_time": None}
 
     if MORNING_WAIT_START <= time_mins < MORNING_START_MINS:
-        # 6:00 AM to 7:00 AM (Prep for Morning Trip)
         return {"trip": "Not in Service", "status": "waiting", "next_trip_time": "07:30 AM"}
     elif EVENING_WAIT_START <= time_mins < EVENING_START_MINS:
-        # 4:30 PM to 5:30 PM (Prep for Evening Trip)
         return {"trip": "Not in Service", "status": "waiting", "next_trip_time": "05:40 PM"}
     else:
-        # Truly offline
         next_trip = "07:30 AM" if time_mins < MORNING_WAIT_START or time_mins > EVENING_END_MINS else "05:40 PM"
         return {"trip": "Not in Service", "status": "offline", "next_trip_time": next_trip}
 
 
 @router.get("/route_history")
-async def route_history(db: AsyncSession = Depends(get_db)):
-    """Visited stops and arrival times for today's current session."""
+async def route_history(trip_id: int = None, db: AsyncSession = Depends(get_db)):
+    """Visited stops and arrival times for today's current session or a specific trip."""
     stops_dicts = await _get_all_stops(db)
 
-    # Use ist_time (Supabase-computed) to determine current IST date and session type
-    now_ist = datetime.now(timezone.utc) + IST_OFFSET
-    is_evening = now_ist.hour > 17 or (now_ist.hour == 17 and now_ist.minute >= 30)
-    today_ist = now_ist.date()
-    start_of_today = datetime.combine(today_ist, datetime.min.time())
+    if trip_id:
+        trip_res = await db.execute(select(Trip).where(Trip.id == trip_id))
+        trip = trip_res.scalar_one_or_none()
+        if trip and trip.started_at:
+            end_time = trip.ended_at or datetime.now(timezone.utc)
+            result = await db.execute(
+                select(GpsLog)
+                .where(
+                    GpsLog.lat.isnot(None),
+                    GpsLog.server_time >= trip.started_at,
+                    GpsLog.server_time <= end_time
+                )
+                .order_by(GpsLog.id)
+            )
+            logs = result.scalars().all()
+        else:
+            logs = []
+    else:
+        # Use ist_time (Supabase-computed) to determine current IST date and session type
+        from zoneinfo import ZoneInfo
+        now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+        is_evening = now_ist.hour > 17 or (now_ist.hour == 17 and now_ist.minute >= 30)
+        today_ist = now_ist.date()
+        # FIX: ist_time in PostgreSQL is TIMESTAMP WITHOUT TIME ZONE (offset-naive).
+        # We must generate an offset-naive datetime for the comparison.
+        start_of_today = datetime.combine(today_ist, datetime.min.time())
 
-    result = await db.execute(
-        select(GpsLog)
-        .where(
-            GpsLog.lat.isnot(None),
-            GpsLog.ist_time >= start_of_today,
+        result = await db.execute(
+            select(GpsLog)
+            .where(
+                GpsLog.lat.isnot(None),
+                GpsLog.ist_time >= start_of_today,
+            )
+            .order_by(GpsLog.id)
         )
-        .order_by(GpsLog.id)
-    )
-    logs = result.scalars().all()
+        logs = result.scalars().all()
+
+        # Filter logs manually for fallback
+        filtered_logs = []
+        for log in logs:
+            log_ist = log.ist_time
+            if log_ist is None:
+                continue
+            entry_hour = log_ist.hour
+            log_is_evening = entry_hour > 17 or (entry_hour == 17 and log_ist.minute >= 30)
+            if is_evening == log_is_evening:
+                filtered_logs.append(log)
+        logs = filtered_logs
 
     visited_stops: dict[str, bool] = {}
     arrival_times: dict[str, str]  = {}
 
     for log in logs:
-        # ist_time is directly stored as IST by Supabase — no conversion needed
         log_ist = log.ist_time
         if log_ist is None:
-            continue
-
-        entry_hour = log_ist.hour
-        log_is_evening = entry_hour > 17 or (entry_hour == 17 and log_ist.minute >= 30)
-        if is_evening != log_is_evening:
             continue
 
         nearest = find_nearest_stop_math(log.lat, log.lon, stops_dicts, threshold_km=0.3)
@@ -391,17 +401,21 @@ async def get_stops(db: AsyncSession = Depends(get_db)):
 
 @router.get("/routes")
 async def get_routes(db: AsyncSession = Depends(get_db)):
-    """Return all routes with their stops."""
+    """Return all routes with their correctly filtered stops."""
     global _ROUTES_CACHE
     if _ROUTES_CACHE is not None:
         return _ROUTES_CACHE
 
     result = await db.execute(select(Route))
     routes = result.scalars().all()
+
+    all_stops = await _get_all_stops(db)
+
     output = []
     for route in routes:
-        stops = await _get_all_stops(db)  # filter by route_id in production
-        output.append({"id": route.id, "name": route.name, "stops": stops})
+        # FIX: filter stops by route_id
+        route_stops = [s for s in all_stops if s.get("route_id") == route.id]
+        output.append({"id": route.id, "name": route.name, "stops": route_stops})
         
     _ROUTES_CACHE = output
     return _ROUTES_CACHE
@@ -444,7 +458,7 @@ async def snap_route(payload: dict):
         elif isinstance(p, dict) and "lat" in p and "lon" in p:
             waypoints.append((float(p["lat"]), float(p["lon"])))
 
-    coords = await get_osrm_match_geometry(waypoints)
+    coords = await get_osrm_route_geometry(waypoints)
     return {"coordinates": coords}
 
 
@@ -519,6 +533,9 @@ async def get_eta(
 
     stops_remaining = len([s for s in ahead if s["order_index"] <= stop.order_index])
 
+    # Snap bus position ONCE and use consistently throughout this request
+    snapped_bus_lat, snapped_bus_lon = await snap_live_gps(latest.lat, latest.lon)
+
     # Compute elapsed minutes from trip start (was hardcoded to 0 before)
     elapsed_minutes = 0.0
     if active_trip and active_trip.started_at:
@@ -528,8 +545,8 @@ async def get_eta(
         elapsed_minutes = max(0.0, (now - trip_started).total_seconds() / 60.0)
 
     prediction = await predict_eta(
-        bus_lat=latest.lat,
-        bus_lon=latest.lon,
+        bus_lat=snapped_bus_lat,
+        bus_lon=snapped_bus_lon,
         target_stop_lat=stop.lat,
         target_stop_lon=stop.lon,
         stops_remaining=stops_remaining,
@@ -543,8 +560,8 @@ async def get_eta(
     response = {
         "stop_id":     stop_id,
         "stop_name":   stop.name,
-        "bus_lat":     latest.lat,
-        "bus_lon":     latest.lon,
+        "bus_lat":     snapped_bus_lat,
+        "bus_lon":     snapped_bus_lon,
         **prediction,
     }
     
@@ -563,8 +580,9 @@ async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
     # Filter by ist_time — Supabase-computed IST column, so dates are always correct
-    start = datetime.combine(target_date, datetime.min.time())
-    end   = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+    from zoneinfo import ZoneInfo
+    start = datetime.combine(target_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata"))
+    end   = datetime.combine(target_date + timedelta(days=1), datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata"))
 
     result = await db.execute(
         select(GpsLog)
@@ -602,14 +620,91 @@ async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
 
     return route_points
 
+@router.get("/current_trace")
+async def get_current_trace(db: AsyncSession = Depends(get_db)):
+    """Return the OSRM-snapped trace for the current session when there is no active Trip ID."""
+    from zoneinfo import ZoneInfo
+    now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+    is_evening = now_ist.hour > 17 or (now_ist.hour == 17 and now_ist.minute >= 30)
+    today_ist = now_ist.date()
+    start_of_today = datetime.combine(today_ist, datetime.min.time())
+
+    result = await db.execute(
+        select(GpsLog)
+        .where(GpsLog.lat.isnot(None), GpsLog.ist_time >= start_of_today)
+        .order_by(GpsLog.id)
+    )
+    logs = result.scalars().all()
+
+    # Filter for the current shift
+    filtered_logs = []
+    for log in logs:
+        if log.ist_time is None: continue
+        entry_hour = log.ist_time.hour
+        log_is_evening = entry_hour > 17 or (entry_hour == 17 and log.ist_time.minute >= 30)
+        if is_evening == log_is_evening:
+            filtered_logs.append(log)
+
+    if not filtered_logs:
+        return {"coordinates": []}
+
+    raw_tuples = [(log.lat, log.lon) for log in filtered_logs]
+    filtered_waypoints = cluster_gps_points(raw_tuples, radius_km=0.030)
+
+    if len(filtered_waypoints) < 2:
+        return {
+            "coordinates": [[w[1], w[0]] for w in filtered_waypoints],
+            "trip_status": "active",
+            "started_at": start_of_today.isoformat(),
+            "ended_at": None,
+        }
+
+    validated = [filtered_waypoints[0]]
+    for i in range(1, len(filtered_waypoints)):
+        dist_m = haversine_m_math(
+            validated[-1][0], validated[-1][1],
+            filtered_waypoints[i][0], filtered_waypoints[i][1],
+        )
+        if dist_m <= 5000:
+            validated.append(filtered_waypoints[i])
+
+    if len(validated) < 2:
+        return {
+            "coordinates": [[w[1], w[0]] for w in validated],
+            "trip_status": "active",
+            "started_at": start_of_today.isoformat(),
+            "ended_at": None,
+        }
+
+    coords = await get_osrm_route_geometry(validated)
+    return {
+        "coordinates": coords,
+        "trip_status": "active",
+        "started_at": start_of_today.isoformat(),
+        "ended_at": None,
+    }
+
+
+
+_TRIP_TRACE_CACHE = {}
 
 @router.get("/trip_trace/{trip_id}")
 async def get_trip_trace(trip_id: int, db: AsyncSession = Depends(get_db)):
-    """Return historical OSRM-snapped trail for the given trip."""
+    """Return historical OSRM-snapped trail for the given trip (cached permanently if completed, otherwise 15s)."""
+    now = datetime.now(timezone.utc).timestamp()
+    if trip_id in _TRIP_TRACE_CACHE:
+        cache_time, cache_data = _TRIP_TRACE_CACHE[trip_id]
+        if cache_time == float('inf') or now - cache_time < 15.0:
+            return cache_data
+
     trip_res = await db.execute(select(Trip).where(Trip.id == trip_id))
     trip = trip_res.scalar_one_or_none()
     if not trip or not trip.started_at:
         return {"coordinates": []}
+        
+    is_permanent = trip.status in ('completed', 'cancelled')
+    cache_time = float('inf') if is_permanent else now
+    
     end_time = trip.ended_at or datetime.now(timezone.utc)
     result = await db.execute(
         select(GpsLog)
@@ -628,8 +723,37 @@ async def get_trip_trace(trip_id: int, db: AsyncSession = Depends(get_db)):
     filtered_waypoints = cluster_gps_points(raw_tuples, radius_km=0.030)
 
     if len(filtered_waypoints) < 2:
-        return {"coordinates": [[w[1], w[0]] for w in filtered_waypoints]}
+        res = {
+            "coordinates": [[w[1], w[0]] for w in filtered_waypoints],
+            "trip_status": trip.status,
+        }
+        _TRIP_TRACE_CACHE[trip_id] = (cache_time, res)
+        return res
 
-    # Use OSRM map matching for smooth road-following curves
-    coords = await get_osrm_match_geometry(filtered_waypoints)
-    return {"coordinates": coords}
+    validated = [filtered_waypoints[0]]
+    for i in range(1, len(filtered_waypoints)):
+        dist_m = haversine_m_math(
+            validated[-1][0], validated[-1][1],
+            filtered_waypoints[i][0], filtered_waypoints[i][1],
+        )
+        if dist_m <= 5000:
+            validated.append(filtered_waypoints[i])
+
+    if len(validated) < 2:
+        res = {
+            "coordinates": [[w[1], w[0]] for w in validated],
+            "trip_status": trip.status,
+        }
+        _TRIP_TRACE_CACHE[trip_id] = (cache_time, res)
+        return res
+
+    # Use OSRM route geometry for smooth road-following curves
+    coords = await get_osrm_route_geometry(validated)
+    res = {
+        "coordinates": coords,
+        "trip_status": trip.status,
+        "started_at": trip.started_at.isoformat() if trip.started_at else None,
+        "ended_at": trip.ended_at.isoformat() if trip.ended_at else None,
+    }
+    _TRIP_TRACE_CACHE[trip_id] = (cache_time, res)
+    return res

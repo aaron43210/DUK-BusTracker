@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getLatestGps, getTripState, getStops, getRouteGeometry, getRouteSegment, getTripTrace } from '../api.js';
+import { getLatestGps, getTripState, getStops, getRouteGeometry, getRouteSegment, getTripTrace, getWsBusUrl } from '../api.js';
+import GPSAnimator from '../utils/gpsAnimator.js';
+import TrailManager from '../utils/trailManager.js';
 import { useToast } from '../App.jsx';
 import { loadMapLibre, haversineDistKm } from '../utils.js';
 import busSvgRaw from '../assets/bus.svg?raw';
@@ -164,25 +166,9 @@ function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, marker
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
-          'visibility': isScheduled ? 'visible' : 'none'
+          'visibility': 'visible'
         },
       });
-    }
-    if (tripId) {
-      try {
-        const trace = await getTripTrace(tripId);
-        if (trace?.coordinates?.length > 0) {
-          trailCoordsRef.current = trace.coordinates;
-          if (map.getSource('live-trail')) {
-            map.getSource('live-trail').setData({
-              type: 'Feature',
-              geometry: { type: 'LineString', coordinates: trailCoordsRef.current }
-            });
-          }
-        }
-      } catch (e) {
-        console.error('Failed to load historical trace', e);
-      }
     }
   });
 }
@@ -203,14 +189,10 @@ export default function Dashboard() {
   const mapBuilt = useRef(false);
   const trailCoordsRef = useRef([]);
   const lastGpsRef = useRef(null);
-  const animFrameRef = useRef(null);
   const currentPosRef = useRef(null);
   const isAutoCenterRef = useRef(true);
-  const lastPingTimeRef = useRef(performance.now());
-  const pingGapRef = useRef(7000); // Start assuming a 7-second hardware ping gap
-  const lastPolylineRef = useRef(null);  // Phase 3: cached OSRM segment
-  const lastHeadingRef = useRef(null);   // Phase 3: heading of last cached segment
-  const lastSpeedRef = useRef(0);        // Phase 4: last known speed km/h
+  const animatorRef = useRef(null);
+  const trailManagerRef = useRef(null);
 
   useEffect(() => {
     isAutoCenterRef.current = autoCenter;
@@ -241,169 +223,42 @@ export default function Dashboard() {
     }
   }, [autoCenter]);
 
-  const animateBusTo = useCallback(async (targetLat, targetLon) => {
-    if (!markerRef.current) return;
-
-    const startPos = currentPosRef.current || [targetLon, targetLat];
-    const [startLon, startLat] = startPos;
-
-    // Ensure startPos is permanently in the trail so we don't get gaps
-    const lastTrailPt = trailCoordsRef.current[trailCoordsRef.current.length - 1];
-    if (!lastTrailPt || lastTrailPt[0] !== startPos[0] || lastTrailPt[1] !== startPos[1]) {
-      trailCoordsRef.current.push(startPos);
-    }
-
-    const distKm = haversineDistKm(startLon, startLat, targetLon, targetLat);
-
-    if (!currentPosRef.current || distKm > 2.0) {
-      markerRef.current.setLngLat([targetLon, targetLat]);
-      currentPosRef.current = [targetLon, targetLat];
-      if (distKm > 2.0) {
-        trailCoordsRef.current = [];
-        if (mapRef.current && mapRef.current.getSource('live-trail')) {
-          mapRef.current.getSource('live-trail').setData({
-            type: 'Feature', geometry: { type: 'LineString', coordinates: [] }
-          });
+  
+  // Initialize animator when map is ready
+  useEffect(() => {
+    // Only init if not already init
+    if (!animatorRef.current) {
+      animatorRef.current = new GPSAnimator({
+        fetchRoadSegment: true,
+        segmentFetcher: async (lat1, lon1, lat2, lon2) => {
+          const seg = await getRouteSegment(lat1, lon1, lat2, lon2);
+          if (seg && seg.coordinates) return seg.coordinates;
+          return [];
+        },
+        onPositionUpdate: (point) => {
+          currentPosRef.current = point;
+          if (markerRef.current) {
+            markerRef.current.setLngLat(point);
+          }
+          if (mapRef.current && isAutoCenterRef.current) {
+            mapRef.current.jumpTo({ center: point });
+          }
         }
-      }
-      if (mapRef.current && isAutoCenterRef.current) {
-        mapRef.current.easeTo({ center: [targetLon, targetLat], duration: 400 });
-      }
-      return;
+      });
     }
 
-    if (distKm < 0.0003) {
-      markerRef.current.setLngLat([targetLon, targetLat]);
-      currentPosRef.current = [targetLon, targetLat];
-      return;
-    }
-
-    let polyline = [[startLon, startLat], [targetLon, targetLat]];
-
-    // Phase 4: Dead-reckoning — project target forward by 3s at current speed
-    // so the marker visually stays aligned with the real bus position.
-    const speed_ms = (lastSpeedRef.current || 0) / 3.6; // km/h → m/s
-    let predictedTargetLon = targetLon;
-    let predictedTargetLat = targetLat;
-    if (speed_ms > 1.0 && currentPosRef.current) {
-      // Bearing from prev position to this ping
-      const dLon = targetLon - startLon;
-      const dLat = targetLat - startLat;
-      const mag = Math.sqrt(dLon * dLon + dLat * dLat);
-      if (mag > 0.000001) {
-        const lookAheadSec = Math.min(3, (pingGapRef.current / 1000) * 0.4);
-        const lookAheadDeg = (speed_ms * lookAheadSec) / 111_320; // metres → degrees
-        predictedTargetLon = targetLon + (dLon / mag) * lookAheadDeg;
-        predictedTargetLat = targetLat + (dLat / mag) * lookAheadDeg;
+    if (mapRef.current && !trailManagerRef.current) {
+      trailManagerRef.current = new TrailManager(mapRef.current, 'live-trail');
+      if (tripState?.trip_id && isScheduledTrip(tripState?.trip) && tripState?.status !== 'completed') {
+        trailManagerRef.current.init(tripState.trip_id);
       }
     }
 
-    // Phase 3: Compute heading of current segment
-    const dLonH = predictedTargetLon - startLon;
-    const dLatH = predictedTargetLat - startLat;
-    const newHeading = Math.atan2(dLonH, dLatH) * (180 / Math.PI);
-
-    // Reuse cached polyline if heading hasn't changed by more than 30°
-    const headingChanged = lastHeadingRef.current === null ||
-      Math.abs(((newHeading - lastHeadingRef.current + 540) % 360) - 180) > 30;
-
-    if (!headingChanged && lastPolylineRef.current) {
-      // Heading is consistent — reuse cached road segment, skip OSRM call
-      polyline = lastPolylineRef.current;
-    } else {
-      try {
-        const seg = await getRouteSegment(startLat, startLon, predictedTargetLat, predictedTargetLon);
-        if (seg?.coordinates?.length >= 2) {
-          polyline = seg.coordinates;
-          lastPolylineRef.current = polyline;
-          lastHeadingRef.current = newHeading;
-        }
-      } catch (_) { }
-    }
-
-    const cumDists = [0];
-    for (let i = 1; i < polyline.length; i++) {
-      cumDists.push(cumDists[i - 1] + haversineDistKm(polyline[i - 1][0], polyline[i - 1][1], polyline[i][0], polyline[i][1]));
-    }
-    const totalDist = cumDists[cumDists.length - 1];
-
-    if (totalDist <= 0.00001) {
-      markerRef.current.setLngLat([targetLon, targetLat]);
-      currentPosRef.current = [targetLon, targetLat];
-      return;
-    }
-
-    // Animation duration matches the full measured ping gap so the marker glides
-    // continuously between hardware pings (7-9 sec) instead of stopping after 2.5s.
-    const duration = Math.min(Math.max(pingGapRef.current || 7000, 3000), 10000);
-    const startTime = performance.now();
-    let appendedIdx = 0;
-    let lastTrailRender = 0;
-
-    const step = (now) => {
-      let progress = (now - startTime) / duration;
-      if (progress > 1.0) progress = 1.0;
-
-      const currentDist = progress * totalDist;
-      let segIdx = 0;
-      while (segIdx < cumDists.length - 2 && cumDists[segIdx + 1] < currentDist) {
-        segIdx++;
-      }
-
-      while (appendedIdx < segIdx) {
-        appendedIdx++;
-        trailCoordsRef.current.push(polyline[appendedIdx]);
-      }
-
-      const p1 = polyline[segIdx];
-      const p2 = polyline[segIdx + 1];
-      const segSpan = (cumDists[segIdx + 1] - cumDists[segIdx]) || 0.00001;
-      const segFrac = Math.max(0, Math.min(1, (currentDist - cumDists[segIdx]) / segSpan));
-
-      const curLon = p1[0] + (p2[0] - p1[0]) * segFrac;
-      const curLat = p1[1] + (p2[1] - p1[1]) * segFrac;
-
-      currentPosRef.current = [curLon, curLat];
-      markerRef.current.setLngLat([curLon, curLat]);
-
-
-      // Smooth 60 FPS camera lockstep: jumpTo eliminates all camera timer fights & stutter!
-      if (mapRef.current && isAutoCenterRef.current) {
-        mapRef.current.jumpTo({ center: [curLon, curLat] });
-      }
-
-      // Throttled trail update to prevent WebGL frame drops
-      if (now - lastTrailRender > 100 || progress >= 1.0) {
-        lastTrailRender = now;
-        if (mapRef.current && mapRef.current.getSource('live-trail')) {
-          const liveCoords = [...trailCoordsRef.current, [curLon, curLat]];
-          mapRef.current.getSource('live-trail').setData({
-            type: 'Feature', geometry: { type: 'LineString', coordinates: liveCoords }
-          });
-        }
-      }
-
-      if (progress < 1.0) {
-        animFrameRef.current = requestAnimationFrame(step);
-      } else {
-        while (appendedIdx < polyline.length - 1) {
-          appendedIdx++;
-          trailCoordsRef.current.push(polyline[appendedIdx]);
-        }
-        const finalPoint = polyline[polyline.length - 1];
-        currentPosRef.current = finalPoint;
-        markerRef.current.setLngLat(finalPoint);
-
-        if (mapRef.current && mapRef.current.getSource('live-trail')) {
-          mapRef.current.getSource('live-trail').setData({
-            type: 'Feature', geometry: { type: 'LineString', coordinates: trailCoordsRef.current }
-          });
-        }
-      }
+    return () => {
+      if (animatorRef.current) animatorRef.current.destroy();
     };
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    animFrameRef.current = requestAnimationFrame(step);
-  }, []);
+  }, [tripState?.trip_id]);
+
 
   async function fetchAll() {
     try {
@@ -439,13 +294,8 @@ export default function Dashboard() {
   // Reset trail when trip completes or goes offline
   useEffect(() => {
     if (tripState?.status === 'completed' || tripState?.status === 'offline' || tripState?.status === 'waiting') {
-      trailCoordsRef.current = [];
-      lastGpsRef.current = null;
-      if (mapRef.current && mapRef.current.getSource('live-trail')) {
-        mapRef.current.getSource('live-trail').setData({
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [] },
-        });
+      if (trailManagerRef.current) {
+        trailManagerRef.current.clear();
       }
     }
   }, [tripState?.status]);
@@ -453,34 +303,17 @@ export default function Dashboard() {
   useEffect(() => {
     fetchAll();
 
-    // Auto-poll live GPS every 1.5 seconds so coordinates, speed, and map marker update smoothly without manual refresh
-    const gpsInterval = setInterval(async () => {
-      try {
-        const latest = await getLatestGps().catch(() => null);
-        if (latest && latest.lat && latest.lon) {
-          setGps(latest);
-          if (latest.is_live) {
-            animateBusTo(latest.lat, latest.lon);
-            setWsStatus('Live');
-          }
-          const busDot = document.getElementById('bus-dot');
-          if (busDot) {
-            busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', latest.is_live ? '#16a34a' : '#6b7280'));
-          }
-        }
-      } catch (_) {}
-    }, 1500);
-
-    // Auto-poll trip state every 5 seconds so status transitions (Active, Completed, Offline) update automatically without refreshing
+    
+    // No more aggressive 1.5s live GPS polling — we use WebSocket for real-time
+    // But we still poll trip state occasionally
     const pollInterval = setInterval(async () => {
       try {
         const tripData = await getTripState().catch(() => null);
         if (tripData) setTripState(tripData);
       } catch (_) {}
-    }, 5000);
+    }, 15000); // 15s instead of 5s
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/bus`;
+    const wsUrl = getWsBusUrl();
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -491,45 +324,31 @@ export default function Dashboard() {
       try {
         const data = JSON.parse(event.data);
 
-        // Raw GPS ping — arrives immediately, triggers main animation
         if (data.type === 'gps' && data.lat && data.lon) {
-          const now = performance.now();
-          const gap = now - lastPingTimeRef.current;
-          if (gap > 500 && gap < 60000) {
-            // Smooth moving average to calculate exact ping rate
-            pingGapRef.current = (pingGapRef.current * 0.3) + (gap * 0.7);
-          }
-          lastPingTimeRef.current = now;
-
           setGps(prev => ({ ...prev, lat: data.lat, lon: data.lon, speed_kmh: data.speed_kmh, server_time: data.server_time, is_live: true }));
-
-          lastSpeedRef.current = data.speed_kmh || 0;
-          animateBusTo(data.lat, data.lon);
+          
+          if (animatorRef.current) {
+            animatorRef.current.pushPoint(data.lat, data.lon, data.server_time);
+          }
+          
+          if (trailManagerRef.current && tripState?.status !== 'completed' && isScheduledTrip(tripState?.trip)) {
+            trailManagerRef.current.addLivePoint(data.lat, data.lon);
+          }
 
           const busDot = document.getElementById('bus-dot');
           if (busDot) {
             busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', '#16a34a'));
           }
         }
-
-        // OSRM snap correction — arrives ~200ms later, nudges marker to road
-        if (data.type === 'gps_snap' && data.lat && data.lon) {
-          // Gently update current position to road-snapped coord without restarting animation
-          currentPosRef.current = [data.lon, data.lat];
-          if (markerRef.current) {
-            markerRef.current.setLngLat([data.lon, data.lat]);
-          }
-        }
       } catch (_) { }
     };
 
     return () => {
-      clearInterval(gpsInterval);
       clearInterval(pollInterval);
       ws.close();
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [animateBusTo]);
+  }, []);
+
 
   useEffect(() => {
     if (loading || mapBuilt.current) return;
@@ -551,21 +370,14 @@ export default function Dashboard() {
     const isScheduled = isScheduledTrip(tripState?.trip) && tripState?.status !== 'completed';
 
     if (map.getLayer('live-trail-layer')) {
-      map.setLayoutProperty('live-trail-layer', 'visibility', isScheduled ? 'visible' : 'none');
+      map.setLayoutProperty('live-trail-layer', 'visibility', 'visible');
     }
     if (map.getLayer('planned-route-layer')) {
       map.setLayoutProperty('planned-route-layer', 'visibility', isScheduled ? 'visible' : 'none');
     }
 
-    // When trip completes or becomes unscheduled, instantly clear the blue trail
-    if (!isScheduled && trailCoordsRef.current.length > 0) {
-      trailCoordsRef.current = [];
-      if (map.getSource('live-trail')) {
-        map.getSource('live-trail').setData({
-          type: 'Feature', geometry: { type: 'LineString', coordinates: [] }
-        });
-      }
-    }
+    // When trip completes, clearing is handled by the other useEffect hook.
+    // Unscheduled trips should retain their blue trail, so we no longer clear based on !isScheduled.
   }, [tripState]);
 
   if (loading) {

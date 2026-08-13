@@ -1288,8 +1288,8 @@ textarea {
 /* ── Floating bus badge — absolutely positioned, slides down the track ── */
 .ios-bus-badge-float {
   position: absolute;
-  left: 95px;
-  /* time-col(75px) + track-col center(40px/2) */
+  left: 115px;
+  /* time-col(75px) + track-col center(40px/2) + container padding(20px) */
   transform: translateX(-50%) translateY(-50%);
   width: 36px;
   height: 36px;

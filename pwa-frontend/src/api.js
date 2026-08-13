@@ -9,6 +9,12 @@
 
 const BASE = import.meta.env.VITE_API_URL || '';
 
+export function getWsBusUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = BASE ? BASE.replace(/^https?:\/\//, '') : window.location.host;
+  return `${protocol}//${host}/api/v1/ws/bus`;
+}
+
 // JWT token — loaded from localStorage on module init
 let _token = localStorage.getItem('duk_jwt_token') || '';
 
@@ -114,16 +120,16 @@ export async function getTripState() {
   return apiFetch('/api/v1/trip_state');
 }
 
-/** Today's visited stops + arrival times for the current session */
-export async function getRouteHistory() {
-  return apiFetch('/api/v1/route_history');
+/** Today's visited stops + arrival times for the current session or a specific trip */
+export async function getRouteHistory(trip_id = null) {
+  const url = trip_id ? `/api/v1/route_history?trip_id=${trip_id}` : '/api/v1/route_history';
+  return apiFetch(url);
 }
 
 /** ML-predicted ETA to a specific bus stop */
 export async function getEta(stop_id) {
   return apiFetch(`/api/v1/eta?stop_id=${stop_id}`);
 }
-
 
 
 /** Road-snapped complete route geometry */
@@ -140,6 +146,7 @@ export async function getRouteSegment(lat1, lon1, lat2, lon2) {
 
 /** Complete historical snapped route trace for a specific trip ID */
 export async function getTripTrace(tripId) {
+  if (!tripId) return apiFetch('/api/v1/current_trace');
   return apiFetch(`/api/v1/trip_trace/${tripId}`);
 }
 

@@ -11,15 +11,16 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import {
-  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops,
+  getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops, getWsBusUrl
 } from '../api';
+import GPSAnimator from '../utils/gpsAnimator';
 import { getUser } from '../storage';
 import {
   getDelayBadge, haversineDistKm, getMapViewport,
 } from '../timetable';
 
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
-const POLL_MS = 1500;
+const POLL_MS = 15000;
 const DEFAULT_CENTER = [76.848, 8.583];
 const DEFAULT_ZOOM = 13;
 
@@ -31,7 +32,8 @@ export default function MapFull() {
   const busMarkerRef = useRef(null);
   const currentPosRef = useRef(null);
   const intervalRef = useRef(null);
-  const animIntervalRef = useRef(null);
+  const animatorRef = useRef(null);
+  const wsRef = useRef(null);
   const cameraLocked = useRef(true); // auto-center on bus
   const initialCentered = useRef(false);
 
@@ -179,43 +181,66 @@ export default function MapFull() {
     }
   }, []);
 
-  const animateBusTo = useCallback(async (targetLat, targetLon) => {
-    const startPos = currentPosRef.current || [targetLon, targetLat];
-    const [startLon, startLat] = startPos;
-    const distKm = haversineDistKm(startLon, startLat, targetLon, targetLat);
-
-    if (!currentPosRef.current || distKm > 8) {
-      const c = [targetLon, targetLat];
-      setAnimatedBus(c); updateBusMarker(c, true);
-      currentPosRef.current = c; return;
-    }
-    if (distKm < 0.0005) {
-      const c = [targetLon, targetLat];
-      setAnimatedBus(c); updateBusMarker(c, true);
-      currentPosRef.current = c; return;
-    }
-
-    let poly = [[startLon, startLat], [targetLon, targetLat]];
-    try {
-      const seg = await getRouteSegment(startLat, startLon, targetLat, targetLon);
-      if (seg?.coordinates?.length > 1) poly = seg.coordinates;
-    } catch (_) { }
-
-    if (animIntervalRef.current) clearInterval(animIntervalRef.current);
-    const steps = Math.min(poly.length, 10);
-    const chunk = Math.max(1, Math.floor(poly.length / steps));
-    let idx = 0;
-    animIntervalRef.current = setInterval(() => {
-      if (idx >= poly.length) {
-        clearInterval(animIntervalRef.current);
-        currentPosRef.current = [targetLon, targetLat];
-        return;
+  
+  // Initialize animator
+  useEffect(() => {
+    animatorRef.current = new GPSAnimator({
+      onPositionUpdate: (point) => {
+        setAnimatedBus(point);
+        updateBusMarker(point, true);
+        currentPosRef.current = point;
+      },
+      segmentFetcher: async (lat1, lon1, lat2, lon2) => {
+        const seg = await getRouteSegment(lat1, lon1, lat2, lon2);
+        if (seg && seg.coordinates) {
+          return seg.coordinates;
+        }
+        return [];
       }
-      const c = [poly[idx][0], poly[idx][1]];
-      setAnimatedBus(c); updateBusMarker(c, true);
-      idx += chunk;
-    }, Math.floor(POLL_MS / steps));
+    });
+
+    return () => {
+      if (animatorRef.current) animatorRef.current.destroy();
+    };
   }, [updateBusMarker]);
+
+  // Connect WebSocket
+  useEffect(() => {
+    let isMounted = true;
+    let ws = null;
+    let reconnectTimeout = null;
+
+    const connectWs = () => {
+      ws = new WebSocket(getWsBusUrl());
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'gps' && animatorRef.current) {
+            animatorRef.current.pushPoint(msg.lat, msg.lon, msg.server_time);
+            setBusPosition((prev) => ({ ...prev, lat: msg.lat, lon: msg.lon, speed_kmh: msg.speed_kmh, is_live: true }));
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        if (isMounted) {
+          reconnectTimeout = setTimeout(connectWs, 2000);
+        }
+      };
+    };
+
+    connectWs();
+
+    return () => {
+      isMounted = false;
+      if (ws) ws.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
+  }, []);
+
 
   // ── Fetch data ──────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -236,7 +261,9 @@ export default function MapFull() {
 
       if (bus?.lat && bus?.lon) {
         if (bus?.is_live) {
-          await animateBusTo(bus.lat, bus.lon);
+          if (animatorRef.current && !currentPosRef.current) {
+            animatorRef.current.pushPoint(bus.lat, bus.lon, null);
+          }
         } else {
           const c = [bus.lon, bus.lat];
           setAnimatedBus(c);
@@ -280,14 +307,14 @@ export default function MapFull() {
     } finally {
       setLoading(false);
     }
-  }, [animateBusTo, plannedCoords, updateBusMarker, updateSources, user?.boarding_stop_id]);
+  }, [plannedCoords, updateBusMarker, updateSources, user?.boarding_stop_id]);
 
   useEffect(() => {
     fetchAll();
     intervalRef.current = setInterval(fetchAll, POLL_MS);
     return () => {
       clearInterval(intervalRef.current);
-      clearInterval(animIntervalRef.current);
+      
     };
   }, [fetchAll]);
 
