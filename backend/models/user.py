@@ -29,12 +29,9 @@ class User(Base):
     # ── Per-user proximity alert preferences ──────────────────────────────────
     # Whether the user has opted into proximity alerts for their stop
     proximity_alert_enabled = Column(Boolean, default=False)
-    # Trigger type: 'time' (minutes), 'distance' (metres by road), 'stops' (stop count)
-    proximity_alert_type    = Column(String(20), nullable=True)
-    # Trigger value: e.g., 5 for 5 minutes / 1000 for 1 km / 2 for 2 stops away
-    proximity_alert_value   = Column(Integer, nullable=True)
-    # Which stop to alert for: 'source' (boarding) | 'destination' | 'both'
-    proximity_alert_for     = Column(String(20), default="source")
+    boarding_alert_stop_id = Column(Integer, nullable=True)
+    destination_alert_stop_id = Column(Integer, nullable=True)
+    last_dest_alerted_trip_id = Column(Integer, nullable=True)
     # Tracks the last trip we already fired the proximity alert for (prevents spam)
     last_alerted_trip_id    = Column(Integer, ForeignKey("trips.id"), nullable=True)
 

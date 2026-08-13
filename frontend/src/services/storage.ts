@@ -1,64 +1,52 @@
+/**
+ * storage.ts
+ * Helper functions for persisting session data using AsyncStorage.
+ * Stores the JWT access token and basic user info locally on the device.
+ */
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const TOKEN_KEY = '@dukbus_token';
-const USER_KEY = '@dukbus_user';
+const TOKEN_KEY = 'jwt_token';
+const USER_KEY  = 'user_data';
 
-export const saveToken = async (token: string) => {
-  try {
-    await AsyncStorage.setItem(TOKEN_KEY, token);
-  } catch (e) {
-    console.error('Error saving token', e);
-  }
-};
+export interface StoredUser {
+  id:              string;
+  name:            string;
+  email:           string;
+  boarding_stop_id: number | null;
+}
 
-export const getToken = async (): Promise<string | null> => {
+// ── Token ──────────────────────────────────────────────────────────────────
+
+export async function saveToken(token: string): Promise<void> {
+  await AsyncStorage.setItem(TOKEN_KEY, token);
+}
+
+export async function getToken(): Promise<string | null> {
+  return AsyncStorage.getItem(TOKEN_KEY);
+}
+
+// ── User ───────────────────────────────────────────────────────────────────
+
+export async function saveUser(user: StoredUser): Promise<void> {
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export async function getUser(): Promise<StoredUser | null> {
+  const raw = await AsyncStorage.getItem(USER_KEY);
+  if (!raw) return null;
   try {
-    return await AsyncStorage.getItem(TOKEN_KEY);
-  } catch (e) {
-    console.error('Error getting token', e);
+    return JSON.parse(raw) as StoredUser;
+  } catch {
     return null;
   }
-};
+}
 
-export const clearToken = async () => {
-  try {
-    await AsyncStorage.removeItem(TOKEN_KEY);
-  } catch (e) {
-    console.error('Error clearing token', e);
-  }
-};
+// ── Clear ──────────────────────────────────────────────────────────────────
 
-export const saveUser = async (user: any) => {
-  try {
-    await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
-  } catch (e) {
-    console.error('Error saving user', e);
-  }
-};
-
-export const getUser = async (): Promise<any | null> => {
-  try {
-    const jsonValue = await AsyncStorage.getItem(USER_KEY);
-    return jsonValue != null ? JSON.parse(jsonValue) : null;
-  } catch (e) {
-    console.error('Error getting user', e);
-    return null;
-  }
-};
-
-export const clearUser = async () => {
-  try {
-    await AsyncStorage.removeItem(USER_KEY);
-  } catch (e) {
-    console.error('Error clearing user', e);
-  }
-};
-
-export const clearAll = async () => {
-  try {
-    await AsyncStorage.removeItem(TOKEN_KEY);
-    await AsyncStorage.removeItem(USER_KEY);
-  } catch (e) {
-    console.error('Error clearing all', e);
-  }
-};
+export async function clearSession(): Promise<void> {
+  await Promise.all([
+    AsyncStorage.removeItem(TOKEN_KEY),
+    AsyncStorage.removeItem(USER_KEY),
+  ]);
+}

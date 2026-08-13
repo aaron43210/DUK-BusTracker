@@ -6,7 +6,8 @@ without overfitting to daily anomalies.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+from constants import IST_OFFSET
 
 from sqlalchemy import select
 
@@ -15,8 +16,6 @@ from models.gps import GpsLog
 from services.eta_engine import force_reload_model
 
 logger = logging.getLogger(__name__)
-
-from constants import IST_OFFSET
 
 def _now_ist() -> datetime:
     return datetime.now(timezone.utc) + IST_OFFSET

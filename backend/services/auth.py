@@ -3,7 +3,6 @@ services/auth.py — JWT creation/verification + OTP store.
 OTP is stored in an in-process dict with TTL.
 (Redis can be swapped in later by replacing _OTP_STORE with redis calls.)
 """
-import time
 import logging
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt

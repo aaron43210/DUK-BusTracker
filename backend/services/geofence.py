@@ -4,7 +4,8 @@ Uses Haversine distance (more accurate than the old Euclidean approach).
 """
 import math
 from typing import Optional
-from services.osrm_client import get_osrm_distance_m, get_osrm_distance_matrix_m
+from services.osrm_client import get_osrm_distance_matrix_m
+
 
 # Keep haversine_km for legacy synchronous calls if any still exist outside this module
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -21,34 +22,10 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
-async def find_nearest_stop(lat: float, lon: float, stops: list[dict], threshold_km: float = 0.4) -> Optional[dict]:
-    """
-    Find the nearest bus stop within the threshold (driving distance).
-    stops: list of dicts with keys {id, name, lat, lon, order_index}
-    Returns the stop dict (with added 'distance_km') or None if nothing is close.
-    """
-    if not stops:
-        return None
-        
-    destinations = [(s["lat"], s["lon"]) for s in stops]
-    distances_m = await get_osrm_distance_matrix_m(lat, lon, destinations)
-    
-    best_stop = None
-    best_dist = float("inf")
-
-    for stop, dist_m in zip(stops, distances_m):
-        dist_km = dist_m / 1000.0
-        if dist_km < best_dist:
-            best_dist = dist_km
-            best_stop = stop
-
-    if best_stop and best_dist <= threshold_km:
-        return {**best_stop, "distance_km": round(best_dist, 4)}
-    return None
 
 def find_nearest_stop_math(lat: float, lon: float, stops: list[dict], threshold_km: float = 0.4) -> Optional[dict]:
     """
-    Synchronous mathematical fallback for bulk historical logs.
+    Synchronous Haversine-based nearest stop lookup. Used for bulk historical logs.
     """
     best_stop = None
     best_dist = float("inf")
@@ -62,6 +39,70 @@ def find_nearest_stop_math(lat: float, lon: float, stops: list[dict], threshold_
     if best_stop and best_dist <= threshold_km:
         return {**best_stop, "distance_km": round(best_dist, 4)}
     return None
+
+
+def cluster_gps_points(
+    points: list,
+    radius_km: float = 0.030,
+    key_lat: str | None = None,
+    key_lon: str | None = None,
+) -> list:
+    """
+    Group consecutive GPS points within `radius_km` of each other into clusters
+    and return a list of centroid points.
+
+    Accepts two formats:
+      - list of (lat, lon) tuples  →  key_lat/key_lon must be None
+      - list of dicts              →  key_lat/key_lon are the dict keys, e.g. 'lat'/'lon'
+
+    Returns the same format as the input (tuples → tuples, dicts → dicts).
+    The centroid dict preserves all keys from the last point in the cluster.
+    """
+    if not points:
+        return []
+
+    def _get(pt):
+        if key_lat:
+            return float(pt[key_lat]), float(pt[key_lon])
+        return float(pt[0]), float(pt[1])
+
+    clusters: list[list] = []
+    current_cluster = [points[0]]
+    anchor_lat, anchor_lon = _get(points[0])
+
+    for pt in points[1:]:
+        pt_lat, pt_lon = _get(pt)
+        if haversine_km(anchor_lat, anchor_lon, pt_lat, pt_lon) < radius_km:
+            current_cluster.append(pt)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [pt]
+            anchor_lat, anchor_lon = pt_lat, pt_lon
+
+    clusters.append(current_cluster)
+
+    centroids = []
+    for cluster in clusters:
+        lats = [_get(p)[0] for p in cluster]
+        lons = [_get(p)[1] for p in cluster]
+        c_lat = sum(lats) / len(lats)
+        c_lon = sum(lons) / len(lons)
+        if key_lat:
+            # Merge the last item's fields and overwrite lat/lon with centroid
+            merged = {**cluster[-1], key_lat: c_lat, key_lon: c_lon}
+            centroids.append(merged)
+        else:
+            centroids.append((c_lat, c_lon))
+
+    # Deduplicate: drop consecutive centroids still within radius
+    deduped = [centroids[0]]
+    for pt in centroids[1:]:
+        pt_lat, pt_lon = _get(pt)
+        last_lat, last_lon = _get(deduped[-1])
+        if haversine_km(last_lat, last_lon, pt_lat, pt_lon) >= radius_km:
+            deduped.append(pt)
+
+    return deduped
 
 
 async def get_stops_ahead(

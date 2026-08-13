@@ -5,13 +5,12 @@ Protected by X-Admin-Token header.
 import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
-from math import radians, cos, sin, asin, sqrt
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, update
-from typing import List, Optional
+from sqlalchemy import select, desc, and_, func, update
+from typing import List, Optional, Literal
 
 from database import get_db
 from models.route import Route, BusStop
@@ -19,7 +18,9 @@ from models.trip import Trip
 from models.gps import GpsLog
 from models.notification import AdminBroadcast, Suggestion, ScheduledNotification
 from services.firebase import broadcast_to_all_users
+from services.geofence import haversine_km, cluster_gps_points
 from services.trip_lifecycle import auto_complete_expired_trips
+from routers.tracking import clear_stops_cache
 from config import get_settings
 from constants import IST_OFFSET, MORNING_END_MINS, EVENING_END_MINS
 
@@ -61,7 +62,7 @@ async def admin_login(req: LoginRequest):
 # ── Trip Management ───────────────────────────────────────────────────────────
 class TripStatusUpdate(BaseModel):
     trip_id:              int
-    status:               str   # active | completed | cancelled | late | stop_change
+    status:               Literal["active", "cancelled", "late", "stop_change", "scheduled"]
     late_by_minutes:      Optional[int] = None
     cancellation_reason:  Optional[str] = None
     reason:               Optional[str] = None  # general reason field for late / stop_change
@@ -85,6 +86,18 @@ async def update_trip_status(
     if req.cancellation_reason:
         trip.cancellation_reason = req.cancellation_reason
     await db.commit()
+
+    # Broadcast trip status via WebSocket
+    try:
+        from routers.gps import manager
+        await manager.broadcast({
+            "type":      "trip_status",
+            "trip_id":   trip.id,
+            "status":    trip.status,
+            "direction": trip.direction,
+        })
+    except Exception as e:
+        logger.debug("[ADMIN] WebSocket broadcast skipped: %s", e)
 
     # Push notification to all users
     title, body = "", ""
@@ -143,12 +156,12 @@ async def ensure_today_trips(
     db:    AsyncSession = Depends(get_db),
     _auth: None = Depends(require_admin),
 ):
-    await auto_complete_expired_trips(db)
     """
     Auto-provision today's Morning and Evening trips if today is a weekday (Mon–Fri).
     Returns the list of today's trips (newly created or already existing).
     If today is Saturday or Sunday, returns an empty list without creating anything.
     """
+    await auto_complete_expired_trips(db)
     async with ensure_trips_lock:
         today = date.today()
         created = False
@@ -352,7 +365,7 @@ async def cancel_advance_trip(
             if remind_date >= now_date:
                 send_dt = _reminder_time(remind_date, direction, 0)
                 # Skip if send_at is already in the past today
-                now_ist = datetime.now(timezone.utc).replace(tzinfo=None) + IST
+                now_ist = datetime.now(timezone.utc).replace(tzinfo=None) + IST_OFFSET
                 if send_dt > now_ist:
                     db.add(ScheduledNotification(
                         trip_id=trip_id,
@@ -521,13 +534,6 @@ async def get_route_history(
     all_stops = [{"id": s.id, "name": s.name, "lat": s.lat, "lon": s.lon}
                  for s in stops_res.scalars().all()]
 
-    def haversine_km(lat1, lon1, lat2, lon2):
-        R = 6371
-        dlat = radians(lat2 - lat1)
-        dlon = radians(lon2 - lon1)
-        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-        return R * 2 * asin(sqrt(a))
-
     def find_nearest_stop(lat, lon, threshold_km=0.3):
         best, best_d = None, float("inf")
         for s in all_stops:
@@ -538,31 +544,25 @@ async def get_route_history(
 
     # Fetch completed trips in range
     # Find unique dates that have GPS logs in the range
-    from sqlalchemy import func
     dates_res = await db.execute(
-        select(func.date(GpsLog.server_time)).where(
-            func.date(GpsLog.server_time).between(d_from, d_to),
+        select(func.date(GpsLog.ist_time)).where(
+            func.date(GpsLog.ist_time).between(d_from, d_to),
             GpsLog.lat.isnot(None)
-        ).distinct().order_by(func.date(GpsLog.server_time).desc())
+        ).distinct().order_by(func.date(GpsLog.ist_time).desc())
     )
     valid_dates = dates_res.scalars().all()
 
-    from datetime import timezone
-    
     sessions = []
     for d in valid_dates:
-        # Force the query bounds to be UTC aware. 
-        # Since the database natively stores IST time but tags it as UTC (+00),
-        # querying with a UTC-aware datetime prevents the database driver from shifting 
-        # our query boundary backwards by 5.5 hours!
-        day_start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+        # Use ist_time for date-boundary filtering — Supabase-computed, always correct IST
+        day_start = datetime.combine(d, datetime.min.time())
         day_end   = day_start + timedelta(days=1)
 
         logs_res = await db.execute(
             select(GpsLog).where(
                 GpsLog.lat.isnot(None),
-                GpsLog.server_time >= day_start,
-                GpsLog.server_time <  day_end,
+                GpsLog.ist_time >= day_start,
+                GpsLog.ist_time <  day_end,
             ).order_by(GpsLog.id)
         )
         logs = logs_res.scalars().all()
@@ -574,12 +574,15 @@ async def get_route_history(
 
         for log in logs:
             if last_lat is not None:
-                if haversine_km(last_lat, last_lon, log.lat, log.lon) < 0.02:
-                    continue  # skip stationary drift < 20 m
+                dist_m = haversine_km(last_lat, last_lon, log.lat, log.lon) * 1000.0
+                # Filter stationary parking drift while bus is stopped / idling
+                if (log.speed is not None and log.speed < 2.5 and dist_m < 15.0) or dist_m < 8.0:
+                    continue
             
-            # The server_time stored in the DB is natively IST, but marked as UTC by PG.
-            # Strip the timezone info so we can format it directly as Indian time.
-            ist_time = log.server_time.replace(tzinfo=None)
+            # ist_time is directly stored as IST by Supabase — no conversion needed
+            ist_time = log.ist_time
+            if ist_time is None:
+                continue
 
             route_points.append({
                 "lat":  log.lat,
@@ -597,8 +600,7 @@ async def get_route_history(
                 })
             last_lat, last_lon = log.lat, log.lon
 
-        # Apply smart map matching (snaps on-road points, keeps off-road raw)
-        # This fixes the "spiderweb" effect caused by raw GPS hardware inaccuracies
+        # Apply high-fidelity OSRM road smoothing
         route_points = await _apply_map_matching(route_points)
 
         sessions.append({
@@ -612,8 +614,8 @@ async def get_route_history(
 
     # Return dates that have GPS logs so the UI calendar can restrict selection
     all_completed_res = await db.execute(
-        select(func.date(GpsLog.server_time)).where(
-            func.date(GpsLog.server_time) <= date.today(),
+        select(func.date(GpsLog.ist_time)).where(
+            func.date(GpsLog.ist_time) <= date.today(),
             GpsLog.lat.isnot(None)
         ).distinct()
     )
@@ -628,93 +630,92 @@ async def _apply_map_matching(
     raw_points: list[dict],
 ) -> list[dict]:
     """
-    Applies high-fidelity map matching by requesting OSRM routes between consecutive GPS points.
-    This injects the exact physical road curvature, preventing straight lines from cutting through buildings.
+    Applies high-fidelity map matching using OSRM's /match API (Viterbi HMM).
+    Seamlessly fits noisy GPS tracks onto road centerlines and filters out off-road building drift.
     """
     if len(raw_points) < 2:
         return raw_points
 
-    osrm_url = "http://localhost:5001/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?geometries=geojson&overview=full"
-    
-    # Limit concurrency to prevent socket exhaustion (Too many open files)
-    sem = asyncio.Semaphore(100)
-    
-    def haversine_km(lat1, lon1, lat2, lon2):
-        R = 6371
-        dlat = math.radians(lat2 - lat1)
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-        return R * 2 * math.asin(math.sqrt(a))
-        
-    async with httpx.AsyncClient() as client:
-        async def fetch_route(pt1, pt2, idx):
-            async with sem:
-                # Skip OSRM for tiny micro-movements to save overhead
-                dist_m = haversine_km(pt1["lat"], pt1["lon"], pt2["lat"], pt2["lon"]) * 1000
-                if dist_m < 5.0:
-                    return idx, [pt2]
-                    
-                try:
-                    url = osrm_url.format(lon1=pt1["lon"], lat1=pt1["lat"], lon2=pt2["lon"], lat2=pt2["lat"])
-                    resp = await client.get(url, timeout=3.0)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        
-                        # Smart Fallback: Check if the bus actually went deep off-road (like inside the college campus)
-                        wps = data.get("waypoints", [])
-                        if len(wps) == 2:
-                            if wps[0].get("distance", 0) > 15.0 or wps[1].get("distance", 0) > 15.0:
-                                # The bus is far away from the main mapped road. Use raw points!
-                                return idx, [pt2]
+    # ── Stationary Cluster Filter ──
+    # Collapse slow indoor GPS drift into single centroid points so OSRM
+    # doesn't route through fake side-street detours.
+    filtered_points = cluster_gps_points(raw_points, radius_km=0.030, key_lat="lat", key_lon="lon")
 
-                        if data.get("routes") and data["routes"][0].get("geometry"):
-                            coords = data["routes"][0]["geometry"]["coordinates"]
-                            new_pts = []
-                            for lon, lat in coords:
-                                new_pts.append({
-                                    "lat": lat,
-                                    "lon": lon,
-                                    "time": pt2["time"],
-                                    "on_road": True
-                                })
-                            return idx, new_pts
-                except Exception:
-                    pass
-                # Fallback to the raw point if OSRM fails or bus is wildly off-road
-                return idx, [pt2]
+    if len(filtered_points) < 2:
+        return raw_points
 
-        tasks = []
-        for i in range(len(raw_points) - 1):
-            tasks.append(fetch_route(raw_points[i], raw_points[i+1], i))
-            
-        import math
-        results = await asyncio.gather(*tasks)
+    CHUNK_SIZE = 60  # OSRM Match works optimally with 50-80 coordinates per batch
+    chunks = []
+    for i in range(0, len(filtered_points), CHUNK_SIZE - 1):
+        chunk = filtered_points[i:i + CHUNK_SIZE]
+        if len(chunk) >= 2:
+            chunks.append(chunk)
 
-    # Reconstruct the array in original order
-    results.sort(key=lambda x: x[0])
+    if not chunks:
+        chunks = [filtered_points]
+
+    matched_results = []
     
-    matched_points = [raw_points[0]]
-    for idx, pts in results:
-        matched_points.extend(pts)
-        
-    return matched_points
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        for chunk in chunks:
+            coords_str = ";".join([f"{pt['lon']:.6f},{pt['lat']:.6f}" for pt in chunk])
+            radiuses_str = ";".join(["40"] * len(chunk))
+            url = f"http://localhost:5001/match/v1/driving/{coords_str}?geometries=geojson&overview=full&tidy=true&gaps=ignore&radiuses={radiuses_str}"
+
+            chunk_matched = []
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("code") == "Ok" and data.get("matchings"):
+                        for matching in data["matchings"]:
+                            geom = matching.get("geometry", {}).get("coordinates", [])
+                            if geom:
+                                for lon, lat in geom:
+                                    chunk_matched.append({
+                                        "lat": lat,
+                                        "lon": lon,
+                                        "time": chunk[-1]["time"],
+                                        "on_road": True
+                                    })
+            except Exception:
+                pass
+
+            if chunk_matched:
+                if matched_results and chunk_matched:
+                    matched_results.extend(chunk_matched[1:])
+                else:
+                    matched_results.extend(chunk_matched)
+            else:
+                # Fallback to chunk's raw coordinates if unroutable
+                matched_results.extend(chunk)
+
+    return matched_results if matched_results else raw_points
 
 
 # ── Stop Management ───────────────────────────────────────────────────────────
 
 class StopCreate(BaseModel):
-    route_id:    int
-    name:        str
-    lat:         float
-    lon:         float
-    order_index: int
+    route_id:     int
+    name:         str
+    lat:          float
+    lon:          float
+    order_index:  int
+    morning_time: str   = Field(..., pattern=r'^\d{2}:\d{2} (AM|PM)$', description='e.g. 07:35 AM')
+    evening_time: str   = Field(..., pattern=r'^\d{2}:\d{2} (AM|PM)$', description='e.g. 06:12 PM')
 
 
 class StopUpdate(BaseModel):
-    name:        Optional[str]   = None
-    lat:         Optional[float] = None
-    lon:         Optional[float] = None
-    order_index: Optional[int]   = None
+    name:         Optional[str]   = None
+    lat:          Optional[float] = None
+    lon:          Optional[float] = None
+    order_index:  Optional[int]   = None
+    morning_time: Optional[str]   = None
+    evening_time: Optional[str]   = None
+
+
+class StopRoleRequest(BaseModel):
+    role: str  # morning_origin | morning_destination | evening_origin | evening_destination | clear
 
 
 @router.get("/stops")
@@ -723,7 +724,23 @@ async def list_stops(db: AsyncSession = Depends(get_db), _auth: None = Depends(r
         select(BusStop).order_by(BusStop.route_id, BusStop.order_index)
     )
     stops = result.scalars().all()
-    return [{"id": s.id, "route_id": s.route_id, "name": s.name, "lat": s.lat, "lon": s.lon, "order_index": s.order_index} for s in stops]
+    return [
+        {
+            "id":                     s.id,
+            "route_id":               s.route_id,
+            "name":                   s.name,
+            "lat":                    s.lat,
+            "lon":                    s.lon,
+            "order_index":            s.order_index,
+            "morning_time":           s.morning_time,
+            "evening_time":           s.evening_time,
+            "is_morning_origin":      bool(s.is_morning_origin),
+            "is_morning_destination": bool(s.is_morning_destination),
+            "is_evening_origin":      bool(s.is_evening_origin),
+            "is_evening_destination": bool(s.is_evening_destination),
+        }
+        for s in stops
+    ]
 
 
 @router.post("/stops")
@@ -751,7 +768,6 @@ async def create_stop(
     await db.commit()
     await db.refresh(stop)
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"id": stop.id, "name": stop.name}
@@ -792,7 +808,6 @@ async def update_stop(
         setattr(stop, field, val)
     await db.commit()
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"success": True}
@@ -831,10 +846,49 @@ async def delete_stop(
     
     await db.commit()
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"success": True}
+
+
+@router.put("/stops/{stop_id}/role")
+async def set_stop_role(
+    stop_id: int,
+    req:     StopRoleRequest,
+    db:      AsyncSession = Depends(get_db),
+    _auth:   None = Depends(require_admin),
+):
+    """
+    Assign a terminal role to a specific stop.
+    Roles: morning_origin | morning_destination | evening_origin | evening_destination
+    Setting a role automatically clears it from whichever stop previously held it.
+    """
+    role_col_map = {
+        "morning_origin":      "is_morning_origin",
+        "morning_destination": "is_morning_destination",
+        "evening_origin":      "is_evening_origin",
+        "evening_destination": "is_evening_destination",
+    }
+    col_name = role_col_map.get(req.role)
+    if not col_name:
+        raise HTTPException(status_code=400, detail=f"Invalid role '{req.role}'. Must be one of: {list(role_col_map.keys())}")
+
+    # Verify the target stop exists
+    result = await db.execute(select(BusStop).where(BusStop.id == stop_id))
+    stop = result.scalar_one_or_none()
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+
+    # Step 1: Clear this role from ALL stops (ensures only one stop holds each role)
+    await db.execute(update(BusStop).values({col_name: False}))
+
+    # Step 2: Assign the role exclusively to the selected stop
+    await db.execute(update(BusStop).where(BusStop.id == stop_id).values({col_name: True}))
+    await db.commit()
+
+    clear_stops_cache()
+    logger.info("[ADMIN] Stop #%d assigned role '%s'", stop_id, req.role)
+    return {"success": True, "stop_id": stop_id, "role": req.role, "stop_name": stop.name}
 
 
 # ── Route Management ──────────────────────────────────────────────────────────
@@ -857,7 +911,6 @@ async def create_route(
     await db.commit()
     await db.refresh(route)
     
-    from routers.tracking import clear_stops_cache
     clear_stops_cache()
     
     return {"id": route.id, "name": route.name}
@@ -868,6 +921,7 @@ class BroadcastRequest(BaseModel):
     title:  str
     body:   str
     target: str = "all"
+    is_urgent: bool = False
 
 
 @router.post("/broadcast")
@@ -876,10 +930,30 @@ async def send_broadcast(
     db:    AsyncSession = Depends(get_db),
     _auth: None = Depends(require_admin),
 ):
-    result = await broadcast_to_all_users(db, req.title, req.body)
+    from models.notification import AdminBroadcast, InAppNotification
+    from models.user import User
+    
+    # 1. Send Push Notifications (urgent or non-urgent)
+    result = await broadcast_to_all_users(db, req.title, req.body, urgent=req.is_urgent)
 
+    # 2. Fan-out InAppNotifications to all verified users
+    users_query = await db.execute(select(User.id).where(User.verified.is_(True)))
+    user_ids = [row[0] for row in users_query.fetchall()]
+    
+    in_app_notifs = [
+        InAppNotification(
+            user_id=uid,
+            title=req.title,
+            body=req.body,
+            type='admin_broadcast'
+        ) for uid in user_ids
+    ]
+    db.add_all(in_app_notifs)
+
+    # 3. Log the broadcast
     log = AdminBroadcast(title=req.title, body=req.body, target=req.target, sent_count=result.get("sent", 0))
     db.add(log)
+    
     await db.commit()
     return {"success": True, **result}
 
@@ -939,11 +1013,32 @@ async def update_suggestion(
         
     await db.commit()
 
-    # Send push notification if a response is given and status is final-ish
-    if user and user.device_token and user.notifications_on and s.admin_response:
+    # Create In-App Notification if a response is given and status is final-ish
+    if user and s.admin_response:
+        from models.notification import InAppNotification
         title = "Response to your suggestion"
         body = f"Admin ({req.status}): {s.admin_response[:100]}..." if len(s.admin_response) > 100 else f"Admin ({req.status}): {s.admin_response}"
-        await send_push_notification([user.device_token], title, body)
+        
+        in_app_notif = InAppNotification(
+            user_id=user.id,
+            title=title,
+            body=body,
+            type='suggestion_response'
+        )
+        db.add(in_app_notif)
+        await db.commit()
+        
+        # Send live push notification so it appears in the app immediately
+        if user.notifications_on and user.device_token:
+            try:
+                await send_push_notification(
+                    device_tokens=[user.device_token],
+                    title=title,
+                    body=body,
+                    urgent=False
+                )
+            except Exception as e:
+                logger.error("[ADMIN] Failed to send push for suggestion response: %s", e)
         
     return {"success": True}
 
@@ -957,3 +1052,5 @@ async def delete_suggestion(sid: int, db: AsyncSession = Depends(get_db), _auth:
     await db.delete(s)
     await db.commit()
     return {"success": True}
+
+

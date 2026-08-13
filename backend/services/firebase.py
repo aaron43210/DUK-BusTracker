@@ -28,6 +28,7 @@ async def send_push_notification(
     title: str,
     body: str,
     data: Optional[dict] = None,
+    urgent: bool = False,
 ) -> dict:
     """
     Send FCM push notification to a list of device tokens using Firebase Admin SDK.
@@ -42,12 +43,23 @@ async def send_push_notification(
     # We must stringify data values for Firebase Admin FCM
     fcm_data = {str(k): str(v) for k, v in (data or {}).items()}
 
+    android_config = None
+    if urgent:
+        android_config = messaging.AndroidConfig(
+            priority='high',
+            notification=messaging.AndroidNotification(
+                default_sound=True,
+                default_vibrate_timings=True,
+            ),
+        )
+
     message = messaging.MulticastMessage(
         notification=messaging.Notification(
             title=title,
             body=body,
         ),
         data=fcm_data,
+        android=android_config,
         tokens=device_tokens,
     )
 
@@ -73,7 +85,7 @@ async def send_push_notification(
         return {"sent": 0, "failed": len(device_tokens)}
 
 
-async def broadcast_to_all_users(db, title: str, body: str, data: Optional[dict] = None) -> dict:
+async def broadcast_to_all_users(db, title: str, body: str, data: Optional[dict] = None, urgent: bool = False) -> dict:
     """Fetch all user FCM tokens from DB and broadcast."""
     from sqlalchemy import select
     from models.user import User
@@ -81,9 +93,9 @@ async def broadcast_to_all_users(db, title: str, body: str, data: Optional[dict]
     result = await db.execute(
         select(User.device_token).where(
             User.device_token.isnot(None),
-            User.notifications_on == True,
-            User.verified == True,
+            User.notifications_on.is_(True),
+            User.verified.is_(True),
         )
     )
     tokens = [row[0] for row in result.fetchall() if row[0]]
-    return await send_push_notification(tokens, title, body, data)
+    return await send_push_notification(tokens, title, body, data, urgent=urgent)

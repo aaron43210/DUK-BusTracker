@@ -29,4 +29,3 @@ class Trip(Base):
     updated_at          = Column(DateTime(timezone=True), onupdate=func.now())
 
     route    = relationship("Route", back_populates="trips")
-    gps_logs = relationship("GpsLog", back_populates="trip")

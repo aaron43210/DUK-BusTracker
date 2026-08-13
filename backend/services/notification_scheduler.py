@@ -12,7 +12,8 @@ When a trip is restored, pending rows are marked cancelled=True.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+from constants import IST_OFFSET
 
 from sqlalchemy import select, and_
 
@@ -21,8 +22,6 @@ from models.notification import ScheduledNotification
 from services.firebase import broadcast_to_all_users
 
 logger = logging.getLogger(__name__)
-
-from constants import IST_OFFSET
 
 
 def _now_ist_naive() -> datetime:
@@ -37,8 +36,8 @@ async def _dispatch_due_notifications():
                 select(ScheduledNotification).where(
                     and_(
                         ScheduledNotification.send_at <= now,
-                        ScheduledNotification.sent == False,
-                        ScheduledNotification.cancelled == False,
+                        ScheduledNotification.sent.is_(False),
+                        ScheduledNotification.cancelled.is_(False),
                     )
                 )
             )

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "773406220529",
+    "project_id": "duk-bus-tracker",
+    "storage_bucket": "duk-bus-tracker.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:773406220529:android:78003a7e2fce916c44c950",
+        "android_client_info": {
+          "package_name": "DUK_BUS.ANDROID"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbBl1rtpQzrtH_6THdPBQb29cbLiwKSfE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

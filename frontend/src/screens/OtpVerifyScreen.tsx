@@ -1,7 +1,7 @@
 /**
  * OtpVerifyScreen.tsx
  * Screen 2 — User enters the 6-digit OTP sent to their university email.
- * TESTING: The dummy valid code is 123456.
+ * Calls the real backend /auth/verify endpoint and saves the JWT on success.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -15,31 +15,33 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Colors from '../theme/colors';
 import TopBar from '../components/TopBar';
-import { ActivityIndicator } from 'react-native';
 import { authApi } from '../services/api';
 import { saveToken, saveUser } from '../services/storage';
+import { registerForPushNotificationsAsync } from '../services/firebaseService';
 
 const CODE_LENGTH = 6;
 
 export default function OtpVerifyScreen({ navigation, route }: any) {
   const { email = 'user@duk.ac.in', name = '', boardingPoint = null } = route?.params ?? {};
 
-  const [otp, setOtp] = useState<string[]>(Array(CODE_LENGTH).fill(''));
-  const [error, setError] = useState('');
+  const [otp, setOtp]             = useState<string[]>(Array(CODE_LENGTH).fill(''));
+  const [error, setError]         = useState('');
   const [resendTimer, setResendTimer] = useState(30);
-  const [verified, setVerified] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [verified, setVerified]   = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
 
-  const inputRefs = useRef<(TextInput | null)[]>(Array(CODE_LENGTH).fill(null));
-  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const inputRefs   = useRef<(TextInput | null)[]>(Array(CODE_LENGTH).fill(null));
+  const shakeAnim   = useRef(new Animated.Value(0)).current;
   const cardOpacity = useRef(new Animated.Value(0)).current;
-  const cardY = useRef(new Animated.Value(16)).current;
-  const successScale = useRef(new Animated.Value(0)).current;
+  const cardY       = useRef(new Animated.Value(16)).current;
+  const successScale= useRef(new Animated.Value(0)).current;
 
   // Entrance animation
   useEffect(() => {
@@ -88,20 +90,29 @@ export default function OtpVerifyScreen({ navigation, route }: any) {
   };
 
   const enteredCode = otp.join('');
-  const isComplete = enteredCode.length === CODE_LENGTH && otp.every(d => d !== '');
+  const isComplete  = enteredCode.length === CODE_LENGTH && otp.every(d => d !== '');
 
+  // ── Verify OTP with real backend ─────────────────────────────────────────
   const handleVerify = async () => {
-    if (!isComplete) return;
-    setLoading(true);
+    if (!isComplete || verifying) return;
+    setVerifying(true);
     setError('');
-    
     try {
-      const response = await authApi.verifyOtp(email, enteredCode);
-      const { access_token, user } = response.data;
-      
+      const res = await authApi.verify(email, enteredCode);
+      const { access_token, user } = res.data;
+
+      // Persist token and user info locally
       await saveToken(access_token);
-      await saveUser(user);
-      
+      await saveUser({
+        id:              user.id,
+        name:            user.name,
+        email:           user.email,
+        boarding_stop_id: user.boarding_stop_id ?? boardingPoint?.id ?? null,
+      });
+
+      // Register device for push notifications
+      registerForPushNotificationsAsync().catch(() => {});
+
       setVerified(true);
       Animated.spring(successScale, {
         toValue: 1,
@@ -109,33 +120,44 @@ export default function OtpVerifyScreen({ navigation, route }: any) {
         tension: 100,
         useNativeDriver: true,
       }).start();
+
+      // Navigate to RouteView after brief success display
       setTimeout(() => {
         navigation?.reset({
           index: 0,
-          routes: [{ name: 'RouteView', params: { name, boardingPoint } }],
+          routes: [{ name: 'RouteView', params: { name: user.name, boardingPoint } }],
         });
       }, 1200);
+
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Incorrect code. Please try again.');
+      const msg = err?.response?.data?.detail;
+      setError(
+        typeof msg === 'string'
+          ? msg
+          : 'Incorrect code. Please try again.'
+      );
       shake();
       setOtp(Array(CODE_LENGTH).fill(''));
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } finally {
-      setLoading(false);
+      setVerifying(false);
     }
   };
 
+  // ── Resend OTP ────────────────────────────────────────────────────────────
   const handleResend = async () => {
-    if (resendTimer > 0) return;
-    setResendTimer(30);
-    setOtp(Array(CODE_LENGTH).fill(''));
-    setError('');
-    setTimeout(() => inputRefs.current[0]?.focus(), 50);
-    
+    if (resendTimer > 0 || resending) return;
+    setResending(true);
     try {
       await authApi.register(name, email, boardingPoint?.id);
-    } catch (err) {
-      console.error('Resend failed', err);
+      setResendTimer(30);
+      setOtp(Array(CODE_LENGTH).fill(''));
+      setError('');
+      setTimeout(() => inputRefs.current[0]?.focus(), 50);
+    } catch {
+      setError('Could not resend code. Please try again.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -189,6 +211,7 @@ export default function OtpVerifyScreen({ navigation, route }: any) {
                   maxLength={1}
                   selectTextOnFocus
                   textAlign="center"
+                  editable={!verifying && !verified}
                 />
               ))}
             </Animated.View>
@@ -211,31 +234,35 @@ export default function OtpVerifyScreen({ navigation, route }: any) {
 
             {/* Verify button */}
             <TouchableOpacity
-              style={[S.verifyBtn, (!isComplete || verified || loading) && S.verifyBtnDisabled]}
+              style={[S.verifyBtn, (!isComplete || verified || verifying) && S.verifyBtnDisabled]}
               onPress={handleVerify}
-              disabled={!isComplete || verified || loading}
+              disabled={!isComplete || verified || verifying}
               activeOpacity={0.75}
             >
-              {loading ? (
-                <ActivityIndicator size="small" color={Colors.black} />
-              ) : (
-                <>
-                  <Text style={S.verifyBtnText}>Verify Code</Text>
-                  <Ionicons name="arrow-forward" size={18} color={Colors.black} />
-                </>
-              )}
+              {verifying
+                ? <ActivityIndicator color={Colors.black} />
+                : <>
+                    <Text style={S.verifyBtnText}>Verify Code</Text>
+                    <Ionicons name="arrow-forward" size={18} color={Colors.black} />
+                  </>
+              }
             </TouchableOpacity>
 
             {/* Resend */}
             <TouchableOpacity
               style={S.resendRow}
               onPress={handleResend}
-              disabled={resendTimer > 0}
+              disabled={resendTimer > 0 || resending}
               activeOpacity={0.7}
             >
               <Text style={S.resendLabel}>Didn't receive it? </Text>
-              <Text style={[S.resendAction, resendTimer > 0 && S.resendActionDisabled]}>
-                {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend code'}
+              <Text style={[S.resendAction, (resendTimer > 0 || resending) && S.resendActionDisabled]}>
+                {resending
+                  ? 'Sending…'
+                  : resendTimer > 0
+                    ? `Resend in ${resendTimer}s`
+                    : 'Resend code'
+                }
               </Text>
             </TouchableOpacity>
 
@@ -263,9 +290,6 @@ const S = StyleSheet.create({
   cardHeading:          { fontSize: 22, fontWeight: '800', color: Colors.black, marginBottom: 8, textAlign: 'center' },
   cardSub:              { fontSize: 14, color: Colors.medGray, textAlign: 'center', lineHeight: 22, marginBottom: 20 },
   emailHighlight:       { color: Colors.black, fontWeight: '700' },
-  hintBox:              { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.mintLighter, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, marginBottom: 28, alignSelf: 'stretch', justifyContent: 'center' },
-  hintText:             { fontSize: 12, color: Colors.mintText, fontWeight: '500' },
-  hintCode:             { fontWeight: '800', letterSpacing: 1 },
   otpRow:               { flexDirection: 'row', gap: 10, marginBottom: 16 },
   otpBox:               { width: 44, height: 54, borderWidth: 2, borderColor: Colors.border, borderRadius: 14, fontSize: 22, fontWeight: '700', color: Colors.black, backgroundColor: Colors.mint50 },
   otpBoxFilled:         { borderColor: Colors.mint, backgroundColor: Colors.white },

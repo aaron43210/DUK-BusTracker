@@ -22,6 +22,7 @@ import models  # noqa: F401
 
 # Routers
 from routers import auth, gps, tracking, admin
+from services.live_gps_poller import live_gps_polling_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,9 +38,27 @@ async def lifespan(app: FastAPI):
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Auto-migrate OTP columns for multi-worker scalability
+        # Auto-migrate: OTP auth columns
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10);"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP WITH TIME ZONE;"))
+        # Auto-migrate: Route terminal role flags (admin-configurable origin/destination)
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_origin BOOLEAN DEFAULT FALSE;"))
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_destination BOOLEAN DEFAULT FALSE;"))
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_origin BOOLEAN DEFAULT FALSE;"))
+        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_destination BOOLEAN DEFAULT FALSE;"))
+        # Auto-migrate: IST time column (Supabase DEFAULT handles new rows; back-fill old rows here)
+        await conn.execute(text("ALTER TABLE gps_realtime ADD COLUMN IF NOT EXISTS ist_time TIMESTAMP WITHOUT TIME ZONE;"))
+        
+        # Fix any incorrectly migrated historical data (the previous manual SQL shifted time backwards by 5.5 hours)
+        # FIX: Only back-fill rows where ist_time is genuinely NULL.
+        # Previously this ran a full-table UPDATE on every startup,
+        # which blocks for minutes on large tables.
+        await conn.execute(text("""
+            UPDATE gps_realtime
+               SET ist_time = created_at AT TIME ZONE 'Asia/Kolkata'
+             WHERE ist_time IS NULL;
+        """))
+
     logger.info("[STARTUP] Database tables ensured.")
 
     # Start the background notification scheduler (fires deferred push notifications)
@@ -50,13 +69,18 @@ async def lifespan(app: FastAPI):
     ml_task = asyncio.create_task(ml_training_loop())
     logger.info("[STARTUP] Background ML training scheduler started.")
 
+    # Start the Live GPS poller (for direct-to-supabase architecture)
+    poller_task = asyncio.create_task(live_gps_polling_loop(gps.manager))
+    logger.info("[STARTUP] Background Live GPS poller started.")
+
     yield
 
     # Gracefully cancel the scheduler on shutdown
     scheduler_task.cancel()
     ml_task.cancel()
+    poller_task.cancel()
     try:
-        await asyncio.gather(scheduler_task, ml_task, return_exceptions=True)
+        await asyncio.gather(scheduler_task, ml_task, poller_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
     await engine.dispose()
@@ -65,29 +89,50 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="DUK Bus Tracker API",
-    version="2.0.0",
+    version="1.0.0",
     description="Real-time bus tracking for Digital University Kerala",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    
-    allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "https://legendary-gaufre-1dc00c.netlify.app",
+    ],
+    allow_origin_regex=r"https://.*\.(vercel|netlify)\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
+async def log_cors_requests(request: Request, call_next):
+    origin = request.headers.get("origin")
+    method = request.method
+    path = request.url.path
+    if method == "OPTIONS":
+        logger.info(f"[CORS-DEBUG] OPTIONS {path} | Origin: {origin}")
+    return await call_next(request)
+
+app.add_middleware(BaseHTTPMiddleware, dispatch=log_cors_requests)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
 app.include_router(gps.router)
 app.include_router(tracking.router)
 app.include_router(admin.router)
+
+from routers import notifications
+app.include_router(notifications.router)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")

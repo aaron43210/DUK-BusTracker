@@ -160,5 +160,11 @@ export async function submitSuggestion(suggestion, trip = '', location = '') {
 }
 
 export async function getMyNotifications() {
-  return apiFetch('/auth/me/notifications');
+  return apiFetch('/api/v1/notifications');
+}
+
+export async function markNotificationRead(id) {
+  return apiFetch(`/api/v1/notifications/${id}/read`, {
+    method: 'PUT',
+  });
 }

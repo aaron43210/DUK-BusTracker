@@ -1,9 +1,8 @@
-"""
-config.py — DUK Bus Tracker
-Centralised environment configuration.  All secrets come from .env (never committed).
-"""
+import os
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 
 class Settings(BaseSettings):
@@ -32,16 +31,17 @@ class Settings(BaseSettings):
 
 
     # ── Allowed email domain ──────────────────────────────────────────────────
-    ALLOWED_EMAIL_DOMAIN: str = ["duk.ac.in","iiitmk.ac.in"]
+    ALLOWED_EMAIL_DOMAIN: str = "duk.ac.in"
 
     # ── OTP TTL in seconds ────────────────────────────────────────────────────
     OTP_TTL_SECONDS: int = 600  # 10 minutes
 
     class Config:
-        env_file = ".env"
+        env_file = ENV_FILE_PATH
         extra = "ignore"
 
 
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
+

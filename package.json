@@ -1,17 +1,7 @@
 {
-  "name": "duk-bustracker",
-  "version": "1.0.0",
-  "private": true,
-  "description": "DUK BusTracker repository containing backend API and frontend mobile app",
-  "scripts": {
-    "start:backend": "cd backend && uvicorn main:app --host 0.0.0.0 --port 5004 --reload",
-    "start:frontend": "cd frontend && npx react-native start",
-    "android": "adb reverse tcp:5004 tcp:5004 && cd frontend && npx react-native run-android --no-packager",
-    "ios": "cd frontend && npx react-native run-ios",
-    "dev": "npx concurrently \"npm run start:backend\" \"npm run start:frontend\" \"npm run android\"",
-    "dev:ios": "npx concurrently \"npm run start:backend\" \"npm run start:frontend\" \"npm run ios\""
-  },
   "dependencies": {
-    "@maplibre/maplibre-react-native": "^11.3.6"
+    "@supabase/supabase-js": "^2.112.1",
+    "express": "^5.2.1",
+    "ws": "^8.21.2"
   }
 }

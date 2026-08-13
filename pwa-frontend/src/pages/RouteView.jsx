@@ -261,27 +261,29 @@ export default function RouteView() {
 
   // ── Derived data ─────────────────────────────────────────────────────────
   // trip is a plain string like "Morning", "Evening", "Unscheduled"
-  const tripName = (typeof tripState?.trip === 'string' ? tripState.trip : '').toLowerCase();
+  const tripName = tripState?.trip?.toLowerCase() || '';
+  const tripStatus = tripState?.status || 'offline';
+  const isActive = tripStatus === 'active' || tripStatus === 'on_trip' || tripStatus === 'late';
+  const showHistory = isActive || tripStatus === 'completed';
+  const isUnscheduled = tripName === 'unscheduled';
+
   const direction = tripName.includes('morning') ? 'forward'
     : tripName.includes('evening') ? 'reverse'
       : new Date().getHours() >= 14 ? 'reverse' : 'forward';
 
   const lateMins = tripState?.late_by_minutes ?? null;
 
-  const tripStatus = tripState ? tripState.status : 'loading';
-  const isActive = tripStatus === 'active';
   const busIsLive = busPosition?.is_live === true;
   const isOnline = isActive;
-  const isUnscheduled = tripName.includes('unscheduled');
 
   // ── Idle mode detection ───────────────────────────────────────────────────
   // Idle = no useful timeline to show. 
   // We rely on the backend's `tripStatus` which already accounts for dead hours, weekends, etc.
-  const isIdleMode = isUnscheduled || ['offline', 'completed', 'weekend', 'idle'].includes(tripStatus);
+  const isIdleMode = ['offline', 'weekend', 'idle', 'completed'].includes(tripStatus);
 
   // Build timeline from stops + visit history
-  const visitedStops = React.useMemo(() => isActive ? (routeHistory?.visitedStops || {}) : {}, [isActive, routeHistory?.visitedStops]);
-  const arrivalTimes = React.useMemo(() => isActive ? (routeHistory?.arrivalTimes || {}) : {}, [isActive, routeHistory?.arrivalTimes]);
+  const visitedStops = React.useMemo(() => showHistory ? (routeHistory?.visitedStops || {}) : {}, [showHistory, routeHistory?.visitedStops]);
+  const arrivalTimes = React.useMemo(() => showHistory ? (routeHistory?.arrivalTimes || {}) : {}, [showHistory, routeHistory?.arrivalTimes]);
 
   // Helper: parse time string like "07:30 AM" → minutes since midnight for sorting
   const timeToMins = (t) => {

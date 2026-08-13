@@ -39,7 +39,7 @@ export default function TopBar({ showBack, onBack }: TopBarProps) {
 }
 
 const S = StyleSheet.create({
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 20, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.separator },
-  iconBtn: { padding: 4, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
-  logo:    { width: 110, height: 36 },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.separator },
+  iconBtn: { padding: 4, width: 36, alignItems: 'center' },
+  logo: { width: 150, height: 40 },
 });
