@@ -34,7 +34,7 @@ const getIcon = (type) => {
 
 export default function NotificationDrawer({ isOpen, onClose }) {
   const overlayRef = useRef(null);
-  const { notifications: contextNotifications, clearNotifications } = useNotifications();
+  const { notifications: contextNotifications, clearNotifications, markRead } = useNotifications();
   const [historyNotifications, setHistoryNotifications] = useState([]);
   const [dismissedIds, setDismissedIds] = useState(() => {
     try {
@@ -52,6 +52,12 @@ export default function NotificationDrawer({ isOpen, onClose }) {
       return next;
     });
   };
+
+  useEffect(() => {
+    if (isOpen && markRead) {
+      markRead();
+    }
+  }, [isOpen, markRead]);
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? 'hidden' : '';
@@ -125,7 +131,7 @@ export default function NotificationDrawer({ isOpen, onClose }) {
             <button
               className="btn btn--primary"
               onClick={handleClearAll}
-              style={{ padding: '6px 12px', fontSize: '12px', width: 'auto' }}
+              style={{ padding: '6px 12px', fontSize: '12px', width: 'auto', marginRight: '36px' }}
             >
               Clear all
             </button>
@@ -139,9 +145,6 @@ export default function NotificationDrawer({ isOpen, onClose }) {
                 const type = typeFromData(notif.data);
                 return (
                   <div key={notif.id} className="notification-item notification-item--unread">
-                    <div className="notification-item__icon-wrapper">
-                      {getIcon(type)}
-                    </div>
                     <div className="notification-item__details" style={{ flex: 1, marginRight: '12px' }}>
                       <div className="notification-item__header">
                         <h4 className="notification-item__title">{notif.title}</h4>

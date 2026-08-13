@@ -7,8 +7,7 @@ import { Menu, ArrowLeft, Bell } from 'lucide-react';
 import { useNotifications } from '../App';
 
 export default function TopBar({ onHamburger, onBack, onNotification, showBack = false }) {
-  const { notifications } = useNotifications();
-  const unreadCount = notifications.length;
+  const { hasUnread } = useNotifications();
 
   return (
     <header className="topbar">
@@ -34,14 +33,15 @@ export default function TopBar({ onHamburger, onBack, onNotification, showBack =
           <button
             className="topbar__icon-btn topbar__bell-btn"
             onClick={onNotification}
-            aria-label={`View notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+            aria-label={`View notifications${hasUnread ? ' (unread)' : ''}`}
             style={{ position: 'relative' }}
           >
             <Bell size={24} />
-            {unreadCount > 0 && (
-              <span className="topbar__notif-badge" aria-hidden="true">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
+            {hasUnread && (
+              <span className="topbar__notif-dot" aria-hidden="true" style={{
+                position: 'absolute', top: '6px', right: '6px', width: '10px', height: '10px',
+                background: '#ef4444', borderRadius: '50%', border: '2px solid var(--white)'
+              }} />
             )}
           </button>
         )}

@@ -160,5 +160,5 @@ export async function submitSuggestion(suggestion, trip = '', location = '') {
 }
 
 export async function getMyNotifications() {
-  return apiFetch('/api/v1/auth/me/notifications');
+  return apiFetch('/auth/me/notifications');
 }

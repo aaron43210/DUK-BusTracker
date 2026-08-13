@@ -478,9 +478,12 @@ export default function RouteView() {
               <div className="ios-stat-item">
                 <div className="ios-stat-value">{etaText}</div>
                 <div className="ios-stat-label">
-                  {etaTargetStopId 
-                    ? `TO ${stops.find(s => s.id === etaTargetStopId)?.name?.toUpperCase() || 'SAVED STOP'}`
-                    : 'TO SAVED STOP'}
+                  {(() => {
+                    const primaryTargetId = direction === 'reverse' ? user?.destination_stop_id : user?.boarding_stop_id;
+                    const displayTargetId = etaTargetStopId || primaryTargetId || (stopsToShow.length > 0 ? stopsToShow[stopsToShow.length - 1].id : null);
+                    const targetName = displayTargetId ? stops.find(s => s.id === displayTargetId)?.name : null;
+                    return targetName ? `TO ${targetName.toUpperCase()}` : 'TO SAVED STOP';
+                  })()}
                 </div>
               </div>
               <div className="ios-stat-divider" />

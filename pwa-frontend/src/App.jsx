@@ -27,7 +27,7 @@ export const ToastContext = createContext(null);
 export function useToast() { return useContext(ToastContext); }
 
 // ── Notification context — live in-app push messages ───────────────────────
-export const NotificationContext = createContext({ notifications: [], addNotification: () => {}, clearNotifications: () => {} });
+export const NotificationContext = createContext({ notifications: [], addNotification: () => {}, clearNotifications: () => {}, hasUnread: false, markRead: () => {} });
 export function useNotifications() { return useContext(NotificationContext); }
 
 function ToastProvider({ children }) {
@@ -222,15 +222,25 @@ function SplashProvider({ children }) {
 // ── Notification Provider — wraps app and receives foreground FCM messages ─
 function NotificationProvider({ children }) {
   const [notifications, setNotifications] = useState([]);
+  const [hasUnread, setHasUnread] = useState(false);
 
   const addNotification = useCallback((notif) => {
     setNotifications((prev) => [
       { id: Date.now(), ...notif, time: new Date() },
       ...prev,
     ].slice(0, 50)); // keep max 50
+    setHasUnread(true);
   }, []);
 
-  const clearNotifications = useCallback(() => setNotifications([]), []);
+  const clearNotifications = useCallback(() => {
+    setNotifications([]);
+    setHasUnread(false);
+  }, []);
+
+  const markRead = useCallback(() => {
+    setHasUnread(false);
+    localStorage.setItem('last_read_time', Date.now().toString());
+  }, []);
 
   const showToast = useToast();
 
@@ -246,8 +256,26 @@ function NotificationProvider({ children }) {
     return unsub;
   }, [addNotification, showToast]);
 
+  // Check for historical unread notifications on mount
+  useEffect(() => {
+    import('./api').then(({ getMyNotifications }) => {
+      getMyNotifications().then(data => {
+        if (data && data.notifications && data.notifications.length > 0) {
+          const lastRead = parseInt(localStorage.getItem('last_read_time') || '0', 10);
+          const hasNew = data.notifications.some(n => {
+            const time = new Date(n.time).getTime();
+            return time > lastRead;
+          });
+          if (hasNew) {
+            setHasUnread(true);
+          }
+        }
+      }).catch(err => console.error('Failed to load initial notifications', err));
+    }).catch(() => {});
+  }, []);
+
   return (
-    <NotificationContext.Provider value={{ notifications, addNotification, clearNotifications }}>
+    <NotificationContext.Provider value={{ notifications, addNotification, clearNotifications, hasUnread, markRead }}>
       {children}
     </NotificationContext.Provider>
   );

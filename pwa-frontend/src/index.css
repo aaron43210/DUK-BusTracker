@@ -308,14 +308,14 @@ textarea {
 .notification-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .notification-item {
   position: relative;
   display: flex;
   gap: 12px;
-  padding: 14px;
+  padding: 10px 12px;
   background: var(--bg-gray);
   border-radius: var(--radius-md);
   border: 1px solid var(--separator);
@@ -378,8 +378,8 @@ textarea {
 
 .notification-item__unread-dot {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 10px;
+  right: 10px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1117,14 +1117,13 @@ textarea {
 /* Single Stats Card */
 .ios-stats-card {
   background: var(--white);
-  border-radius: 18px;
+  border-radius: 14px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 12px 16px;
   margin-bottom: 12px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
-  border-radius: 14px;
 }
 
 .ios-stat-item {
@@ -1132,6 +1131,7 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 4px;
 }
 
@@ -1147,12 +1147,14 @@ textarea {
   color: var(--light-gray);
   letter-spacing: 0.5px;
   text-transform: uppercase;
+  text-align: center;
 }
 
 .ios-stat-divider {
   width: 1px;
   height: 24px;
   background: var(--separator);
+  margin-top: 4px;
 }
 
 /* Timeline Card */

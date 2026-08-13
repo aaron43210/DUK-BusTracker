@@ -14,8 +14,10 @@ export default function AboutModal({ isOpen, onClose }) {
           <img src="/duk-logo.png" alt="DUK Logo" style={{ height: '60px', objectFit: 'contain', marginBottom: '16px' }} />
           <h2 className="modal-title">About the Project</h2>
         </div>
-        <p className="about-text">
-          Developed By <strong>A Muhammed khais e</strong> and <strong>AARON R</strong> as a project supervised by <strong>Dr. John Eric Stephen</strong> with collaboration with <strong>CAN LAB DIGITAL UNIVERSITY KERALA</strong>.
+        <p className="about-text" style={{ margin: '0 auto' }}>
+          Developed By <strong style={{ whiteSpace: 'nowrap' }}>A Muhammed Khaise</strong> and <strong style={{ whiteSpace: 'nowrap' }}>Aaron R</strong><br />
+          as a project supervised by <strong style={{ whiteSpace: 'nowrap' }}>Dr. John Eric Stephen</strong><br />
+          with collaboration with <strong style={{ whiteSpace: 'nowrap' }}>CAN LAB, DIGITAL UNIVERSITY KERALA</strong>.
         </p>
       </div>
     </div>
