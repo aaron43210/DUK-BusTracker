@@ -10,7 +10,7 @@ function typeFromData(data) {
   if (!data) return 'info';
   if (data.type === 'eta_late') return 'warning';
   if (data.type === 'proximity') return 'success';
-  if (data.type === 'suggestion') return 'success';
+  if (data.type === 'suggestion' || data.type === 'suggestion_response') return 'success';
   return 'info';
 }
 
