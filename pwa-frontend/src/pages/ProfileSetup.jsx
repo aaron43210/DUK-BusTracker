@@ -42,7 +42,7 @@ export default function ProfileSetup() {
           setStops(boarding.length ? boarding : data);
         }
       })
-      .catch(() => {}); // NetworkGate blocks offline users — this catch is a safety no-op
+      .catch(() => { }); // NetworkGate blocks offline users — this catch is a safety no-op
   }, []);
 
   // Close both dropdowns on outside click
@@ -139,7 +139,7 @@ export default function ProfileSetup() {
               >
                 <span>{domain}</span>
                 <span className="setup-domain-chevron">
-                  {domainDropOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  {domainDropOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                 </span>
               </button>
 
@@ -189,7 +189,7 @@ export default function ProfileSetup() {
                     : <span className="setup-placeholder">Select your boarding stop</span>
                   }
                   <span className="setup-dropdown-chevron">
-                    {dropOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    {dropOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   </span>
                 </button>
 
@@ -223,7 +223,7 @@ export default function ProfileSetup() {
         >
           {submitting
             ? 'Sending…'
-            : <><span>Send Verification Code</span><ChevronRight size={18} /></>
+            : <><span >Send Verification Code</span><ChevronRight size={16} /></>
           }
         </button>
 

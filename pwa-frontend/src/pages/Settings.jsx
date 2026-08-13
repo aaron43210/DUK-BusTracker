@@ -4,13 +4,50 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, MapPin, Bell, LogOut } from 'lucide-react';
+import { User, MapPin, Bell, LogOut, Sun, Moon, Info, Check } from 'lucide-react';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import { getUser, saveUser, clearSession } from '../storage';
 import { updatePreferences, getStops } from '../api';
 import { EMAIL_DOMAINS } from '../timetable';
 import { useToast } from '../App';
+
+const StopSelectModal = ({ isOpen, title, stops, selectedStopId, onSelect, onClose }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="otp-overlay" role="dialog" aria-modal="true" style={{ zIndex: 2000 }}>
+      <div className="otp-backdrop" onClick={onClose} />
+      <div className={`otp-sheet ${isOpen ? 'otp-sheet--open' : ''}`} style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column', paddingBottom: 16 }}>
+        <div className="otp-sheet__handle" />
+        <div className="otp-sheet__header" style={{ paddingBottom: 16 }}>
+          <div className="otp-sheet__title" style={{ fontSize: 20, fontWeight: 700 }}>{title}</div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, paddingRight: 4 }}>
+          {stops.map(stop => (
+            <button
+              key={stop.id}
+              onClick={() => onSelect(stop)}
+              style={{
+                textAlign: 'left',
+                padding: '14px 16px',
+                borderRadius: 12,
+                fontSize: 15,
+                fontWeight: stop.id === selectedStopId ? 700 : 500,
+                background: stop.id === selectedStopId ? 'var(--mint-lighter)' : 'var(--bg-gray)',
+                color: stop.id === selectedStopId ? 'var(--mint-text)' : 'var(--black)',
+                border: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              {stop.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -21,32 +58,65 @@ export default function Settings() {
   const [stops, setStops] = useState([]);
   const [notifEnabled, setNotifEnabled] = useState(false);
   const [alertEnabled, setAlertEnabled] = useState(false);
-  const [alertType, setAlertType] = useState('time');
-  const [alertValue, setAlertValue] = useState(5);
+  const [boardingAlertStopId, setBoardingAlertStopId] = useState(null);
+  const [destinationAlertStopId, setDestinationAlertStopId] = useState(null);
+  const [boardingAlertEdit, setBoardingAlertEdit] = useState(false);
+  const [destinationAlertEdit, setDestinationAlertEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [boardingEdit, setBoardingEdit] = useState(false);
+  const [destinationEdit, setDestinationEdit] = useState(false);
+  const [hasCustomDest, setHasCustomDest] = useState(false);
 
   useEffect(() => {
     const u = getUser();
     setUser(u);
+    if (u) {
+      if (u.destination_stop_id) setHasCustomDest(true);
+      if (typeof u.proximity_alert_enabled !== 'undefined') setAlertEnabled(u.proximity_alert_enabled);
+      if (typeof u.boarding_alert_stop_id !== 'undefined') setBoardingAlertStopId(u.boarding_alert_stop_id);
+      if (typeof u.destination_alert_stop_id !== 'undefined') setDestinationAlertStopId(u.destination_alert_stop_id);
+    }
     // Fetch live stops
     getStops()
       .then(data => { if (Array.isArray(data) && data.length) setStops(data); })
       .catch(() => { });
   }, []);
 
-  const currentStopName = stops.find(s => s.id === user?.boarding_stop_id)?.name || '—';
+  const currentStopName = stops.find(s => s.id === user?.boarding_stop_id)?.name || 'Not set';
+  const currentDestName = stops.find(s => s.id === user?.destination_stop_id)?.name || 'Not set';
 
   const handleBoardingChange = async (stop) => {
     setBoardingEdit(false);
     const updated = { ...user, boarding_stop_id: stop.id };
     saveUser(updated);
     setUser(updated);
+    // Boarding stop is not part of proximity preferences, we don't need to call updatePreferences just for this
+    // unless there is an endpoint to update user profile. For now, it's saved locally.
+    showToast(`Boarding stop updated to ${stop.name}`, 'success');
+  };
+
+  const handleDestinationChange = async (stop) => {
+    setDestinationEdit(false);
+    const updated = { ...user, destination_stop_id: stop.id };
+    saveUser(updated);
+    setUser(updated);
+    showToast(`Destination stop updated to ${stop.name}`, 'success');
+  };
+
+  const handleCustomDestToggle = async (val) => {
+    setHasCustomDest(val);
+    setSaving(true);
     try {
-      await updatePreferences({ proximity_alert_for: 'source' });
-      showToast(`Boarding stop updated to ${stop.name}`, 'success');
+      if (!val) {
+        const updated = { ...user, destination_stop_id: null, destination_alert_stop_id: null };
+        saveUser(updated);
+        setUser(updated);
+        await updatePreferences({ destination_alert_stop_id: null });
+      }
     } catch {
-      showToast('Preference saved locally.', 'info');
+      showToast('Failed to save preference.', 'error');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -69,8 +139,6 @@ export default function Settings() {
     try {
       await updatePreferences({
         proximity_alert_enabled: val,
-        proximity_alert_type: alertType,
-        proximity_alert_value: alertValue,
       });
       showToast(val ? 'Proximity alert enabled' : 'Proximity alert disabled', 'success');
     } catch {
@@ -78,6 +146,32 @@ export default function Settings() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleBoardingAlertChange = async (stop) => {
+    setBoardingAlertEdit(false);
+    setBoardingAlertStopId(stop.id);
+    const updated = { ...user, boarding_alert_stop_id: stop.id };
+    saveUser(updated);
+    setUser(updated);
+    setSaving(true);
+    try {
+      await updatePreferences({ boarding_alert_stop_id: stop.id });
+      showToast(`Boarding alert stop updated to ${stop.name}`, 'success');
+    } catch {} finally { setSaving(false); }
+  };
+
+  const handleDestinationAlertChange = async (stop) => {
+    setDestinationAlertEdit(false);
+    setDestinationAlertStopId(stop.id);
+    const updated = { ...user, destination_alert_stop_id: stop.id };
+    saveUser(updated);
+    setUser(updated);
+    setSaving(true);
+    try {
+      await updatePreferences({ destination_alert_stop_id: stop.id });
+      showToast(`Destination alert stop updated to ${stop.name}`, 'success');
+    } catch {} finally { setSaving(false); }
   };
 
   const handleLogout = () => {
@@ -104,7 +198,7 @@ export default function Settings() {
           <div className="settings-card">
 
             <div className="settings-row">
-              <div className="settings-row__icon"><User size={18} /></div>
+
               <div className="settings-row__content">
                 <div className="settings-row__label">Name</div>
                 <div className="settings-row__value">{user?.name || '—'}</div>
@@ -112,50 +206,71 @@ export default function Settings() {
             </div>
 
             <div className="settings-row">
-              <div className="settings-row__icon" style={{ fontSize: '16px' }}>✉️</div>
+
               <div className="settings-row__content">
                 <div className="settings-row__label">Email</div>
-                <div className="settings-row__value" style={{ fontSize: '13px', wordBreak: 'break-all' }}>
-                  {user?.email || '—'}
+                <div className="settings-row__value" style={{ fontSize: '15px', wordBreak: 'break-all' }}>
+                  {user?.email || 'Not set'}
                 </div>
               </div>
             </div>
 
             <div className="settings-row" style={{ alignItems: 'flex-start' }}>
-              <div className="settings-row__icon"><MapPin size={18} /></div>
+
               <div className="settings-row__content">
                 <div className="settings-row__label">Boarding Stop</div>
-                {boardingEdit ? (
-                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {stops.map(stop => (
-                      <button
-                        key={stop.id}
-                        onClick={() => handleBoardingChange(stop)}
-                        style={{
-                          textAlign: 'left',
-                          padding: '8px 12px',
-                          borderRadius: 10,
-                          fontSize: 14,
-                          fontWeight: stop.id === user?.boarding_stop_id ? 700 : 500,
-                          background: stop.id === user?.boarding_stop_id ? 'var(--mint-lighter)' : 'var(--bg-gray)',
-                          color: stop.id === user?.boarding_stop_id ? 'var(--mint-text)' : 'var(--black)',
-                        }}
-                      >
-                        {stop.name}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => setBoardingEdit(false)}
-                      style={{ color: 'var(--med-gray)', fontSize: 13, marginTop: 4 }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
+                  <div className="settings-row__value">{currentStopName}</div>
+                  <button
+                    onClick={() => setBoardingEdit(true)}
+                    style={{
+                      fontSize: 12, fontWeight: 600, color: 'var(--mint-dark)',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Change
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-row">
+              <div className="settings-row__content">
+                <div className="settings-row__label">Different Destination Point</div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={hasCustomDest}
+                  onChange={e => handleCustomDestToggle(e.target.checked)}
+                  disabled={saving}
+                  style={{ display: 'none' }}
+                />
+                <div style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 6,
+                  border: `2px solid ${hasCustomDest ? 'var(--mint-dark)' : '#ccc'}`,
+                  backgroundColor: hasCustomDest ? 'var(--mint-dark)' : 'transparent',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s ease',
+                  boxShadow: hasCustomDest ? '0 2px 5px rgba(0,0,0,0.1)' : 'none'
+                }}>
+                  {hasCustomDest && <Check size={16} color="white" strokeWidth={3} />}
+                </div>
+              </label>
+            </div>
+
+            {hasCustomDest && (
+              <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+                <div className="settings-row__content">
+                  <div className="settings-row__label">Destination Stop</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
-                    <div className="settings-row__value">{currentStopName}</div>
+                    <div className="settings-row__value">{currentDestName}</div>
                     <button
-                      onClick={() => setBoardingEdit(true)}
+                      onClick={() => setDestinationEdit(true)}
                       style={{
                         fontSize: 12, fontWeight: 600, color: 'var(--mint-dark)',
                         textDecoration: 'underline',
@@ -164,9 +279,9 @@ export default function Settings() {
                       Change
                     </button>
                   </div>
-                )}
+                </div>
               </div>
-            </div>
+            )}
 
           </div>
 
@@ -175,25 +290,67 @@ export default function Settings() {
           <div className="settings-card">
 
             <div className="settings-row">
-              <div className="settings-row__icon">
-                {tripType === 'Morning' ? <Sun size={18} /> : <Moon size={18} />}
-              </div>
+
               <div className="settings-row__content">
-                <div className="settings-row__label">Default Trip</div>
-                <div style={{ marginTop: 6 }}>
-                  <div className="trip-toggle">
-                    <button
-                      className={`trip-toggle__btn${tripType === 'Morning' ? ' trip-toggle__btn--active' : ''}`}
-                      onClick={() => setTripType('Morning')}
-                    >Morning</button>
-                    <button
-                      className={`trip-toggle__btn${tripType === 'Evening' ? ' trip-toggle__btn--active' : ''}`}
-                      onClick={() => setTripType('Evening')}
-                    >Evening</button>
-                  </div>
+                <div className="settings-row__label">Proximity Alert</div>
+                <div className="settings-row__value">
+                  {alertEnabled ? 'Enabled' : 'Disabled'}
                 </div>
               </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={alertEnabled}
+                  onChange={e => handleAlertToggle(e.target.checked)}
+                  disabled={saving}
+                />
+                <span className="toggle__slider" />
+              </label>
             </div>
+
+            {alertEnabled && (
+              <>
+                <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+                  <div className="settings-row__content">
+                    <div className="settings-row__label">Boarding Alert Stop</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
+                      <div className="settings-row__value">{stops.find(s => s.id === boardingAlertStopId)?.name || 'Not set'}</div>
+                      <button
+                        onClick={() => setBoardingAlertEdit(true)}
+                        style={{
+                          fontSize: 12, fontWeight: 600, color: 'var(--mint-dark)',
+                          textDecoration: 'underline',
+                        }}
+                        disabled={saving}
+                      >
+                        Change
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {hasCustomDest && (
+                  <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+                    <div className="settings-row__content">
+                      <div className="settings-row__label">Destination Alert Stop</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
+                        <div className="settings-row__value">{stops.find(s => s.id === destinationAlertStopId)?.name || 'Not set'}</div>
+                        <button
+                          onClick={() => setDestinationAlertEdit(true)}
+                          style={{
+                            fontSize: 12, fontWeight: 600, color: 'var(--mint-dark)',
+                            textDecoration: 'underline',
+                          }}
+                          disabled={saving}
+                        >
+                          Change
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
 
           </div>
 
@@ -202,7 +359,7 @@ export default function Settings() {
           <div className="settings-card">
 
             <div className="settings-row">
-              <div className="settings-row__icon"><Bell size={18} /></div>
+
               <div className="settings-row__content">
                 <div className="settings-row__label">Push Notifications</div>
                 <div className="settings-row__value">{notifEnabled ? 'Enabled' : 'Disabled'}</div>
@@ -218,55 +375,74 @@ export default function Settings() {
               </label>
             </div>
 
-            <div className="settings-row">
-              <div className="settings-row__icon">📍</div>
-              <div className="settings-row__content">
-                <div className="settings-row__label">Proximity Alert</div>
-                <div className="settings-row__value">
-                  {alertEnabled
-                    ? `${alertValue} ${alertType === 'time' ? 'min' : alertType === 'distance' ? 'm' : 'stops'} before arrival`
-                    : 'Disabled'
-                  }
-                </div>
-              </div>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={alertEnabled}
-                  onChange={e => handleAlertToggle(e.target.checked)}
-                  disabled={saving}
-                />
-                <span className="toggle__slider" />
-              </label>
-            </div>
+
 
           </div>
 
           {/* ── App Info ── */}
-          <div className="settings-section-label">App</div>
-          <div className="settings-card">
-            <div className="settings-row">
-              <div className="settings-row__icon"><Info size={18} /></div>
-              <div className="settings-row__content">
-                <div className="settings-row__label">Version</div>
-                <div className="settings-row__value">1.0.0 PWA</div>
-              </div>
-            </div>
+          <div style={{ textAlign: 'center', marginTop: 32, marginBottom: -8, color: '#aaa', fontSize: 13 }}>
+            Version 1.0.0 PWA
           </div>
 
-          {/* Logout */}
+          {/* Logout — subtle, text-based */}
           <button
             id="logout-btn"
-            className="btn btn--danger"
             onClick={handleLogout}
-            style={{ marginTop: 8 }}
+            style={{ 
+              marginTop: 24, 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              gap: 8, 
+              background: 'transparent', 
+              border: 'none', 
+              color: '#888', 
+              fontSize: 16, 
+              fontWeight: 500,
+              cursor: 'pointer',
+              padding: '12px',
+              width: '100%'
+            }}
           >
             <LogOut size={18} />
-            Sign Out
+            Log Out
           </button>
 
         </div>
       </div>
+
+      <StopSelectModal
+        isOpen={boardingEdit}
+        title="Select Boarding Stop"
+        stops={stops}
+        selectedStopId={user?.boarding_stop_id}
+        onSelect={handleBoardingChange}
+        onClose={() => setBoardingEdit(false)}
+      />
+      <StopSelectModal
+        isOpen={destinationEdit}
+        title="Select Destination Stop"
+        stops={stops}
+        selectedStopId={user?.destination_stop_id}
+        onSelect={handleDestinationChange}
+        onClose={() => setDestinationEdit(false)}
+      />
+      <StopSelectModal
+        isOpen={boardingAlertEdit}
+        title="Select Boarding Alert Stop"
+        stops={stops}
+        selectedStopId={boardingAlertStopId}
+        onSelect={handleBoardingAlertChange}
+        onClose={() => setBoardingAlertEdit(false)}
+      />
+      <StopSelectModal
+        isOpen={destinationAlertEdit}
+        title="Select Destination Alert Stop"
+        stops={stops}
+        selectedStopId={destinationAlertStopId}
+        onSelect={handleDestinationAlertChange}
+        onClose={() => setDestinationAlertEdit(false)}
+      />
     </>
   );
 }

@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, func
+from sqlalchemy import select, desc, and_, func, update
 from typing import List, Optional, Literal
 
 from database import get_db
@@ -996,7 +996,7 @@ async def update_suggestion(
     if user and user.device_token and user.notifications_on and s.admin_response:
         title = "Response to your suggestion"
         body = f"Admin ({req.status}): {s.admin_response[:100]}..." if len(s.admin_response) > 100 else f"Admin ({req.status}): {s.admin_response}"
-        await send_push_notification([user.device_token], title, body)
+        await send_push_notification([user.device_token], title, body, data={"type": "suggestion"})
         
     return {"success": True}
 

@@ -5,6 +5,7 @@ OTP is required for first-time login only; subsequent logins use the stored JWT.
 """
 import logging
 import uuid
+from uuid import UUID
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -55,12 +56,8 @@ class DeviceTokenRequest(BaseModel):
 class ProximityPrefsRequest(BaseModel):
     """Payload for updating a user's proximity alert preferences."""
     proximity_alert_enabled: bool = False
-    # 'time' (minutes) | 'distance' (metres by road) | 'stops' (stop count)
-    proximity_alert_type:    Optional[str] = None
-    # Value: e.g., 5 min / 1000 m / 2 stops
-    proximity_alert_value:   Optional[int] = None
-    # 'source' | 'destination' | 'both'
-    proximity_alert_for:     Optional[str] = "source"
+    boarding_alert_stop_id:  Optional[int] = None
+    destination_alert_stop_id: Optional[int] = None
     notifications_on:        Optional[bool] = None
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -179,16 +176,10 @@ async def update_preferences(
         raise HTTPException(status_code=404, detail="User not found.")
 
     user.proximity_alert_enabled = req.proximity_alert_enabled
-    if req.proximity_alert_type is not None:
-        if req.proximity_alert_type not in ("time", "distance", "stops", None):
-            raise HTTPException(status_code=400, detail="alert_type must be 'time', 'distance', or 'stops'.")
-        user.proximity_alert_type = req.proximity_alert_type
-    if req.proximity_alert_value is not None:
-        user.proximity_alert_value = req.proximity_alert_value
-    if req.proximity_alert_for is not None:
-        if req.proximity_alert_for not in ("source", "destination", "both"):
-            raise HTTPException(status_code=400, detail="alert_for must be 'source', 'destination', or 'both'.")
-        user.proximity_alert_for = req.proximity_alert_for
+    if req.boarding_alert_stop_id is not None:
+        user.boarding_alert_stop_id = req.boarding_alert_stop_id
+    if req.destination_alert_stop_id is not None:
+        user.destination_alert_stop_id = req.destination_alert_stop_id
     if req.notifications_on is not None:
         user.notifications_on = req.notifications_on
 
@@ -198,8 +189,65 @@ async def update_preferences(
 
     return {
         "success":                 True,
-        "proximity_alert_enabled": user.proximity_alert_enabled,
-        "proximity_alert_type":    user.proximity_alert_type,
-        "proximity_alert_value":   user.proximity_alert_value,
-        "proximity_alert_for":     user.proximity_alert_for,
+        "proximity_alert_enabled":   user.proximity_alert_enabled,
+        "boarding_alert_stop_id":    user.boarding_alert_stop_id,
+        "destination_alert_stop_id": user.destination_alert_stop_id,
     }
+
+
+@router.get("/me/notifications")
+async def get_my_notifications(
+    db: AsyncSession = Depends(get_db), 
+    current_user_id: UUID = Depends(get_current_user_id)
+):
+    """Fetch persistent notifications (suggestion responses and broadcasts) for the current user."""
+    from models.notification import Suggestion, AdminBroadcast
+    from sqlalchemy import desc
+    
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+        
+    # Get user's suggestions with responses
+    s_result = await db.execute(
+        select(Suggestion)
+        .where(Suggestion.user_id == current_user_id, Suggestion.admin_response.isnot(None))
+        .order_by(desc(Suggestion.id))
+        .limit(20)
+    )
+    suggestions = s_result.scalars().all()
+    
+    items = []
+    for s in suggestions:
+        title = "Response to your suggestion"
+        body = f"Admin ({s.status}): {s.admin_response}"
+        items.append({
+            "id": f"sugg_{s.id}",
+            "notification": {
+                "title": title,
+                "body": body
+            },
+            "time": s.created_at.isoformat() if s.created_at else None,
+            "type": "suggestion"
+        })
+        
+    # Get recent admin broadcasts
+    b_result = await db.execute(
+        select(AdminBroadcast)
+        .order_by(desc(AdminBroadcast.id))
+        .limit(10)
+    )
+    broadcasts = b_result.scalars().all()
+    for b in broadcasts:
+        items.append({
+            "id": f"bc_{b.id}",
+            "notification": {
+                "title": b.title,
+                "body": b.body
+            },
+            "time": b.sent_at.isoformat() if b.sent_at else None,
+            "type": "broadcast"
+        })
+        
+    # Sort descending by time
+    items.sort(key=lambda x: x["time"] or "", reverse=True)
+    return {"notifications": items[:30]}

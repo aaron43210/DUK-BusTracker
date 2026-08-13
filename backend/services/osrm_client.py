@@ -7,7 +7,7 @@ import httpx
 import logging
 import math
 import os
-from typing import List, Tuple
+from typing import List
 
 logger = logging.getLogger(__name__)
 

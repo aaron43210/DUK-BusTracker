@@ -151,3 +151,7 @@ export async function submitSuggestion(suggestion, trip = '', location = '') {
     body: JSON.stringify({ suggestion, trip, location }),
   });
 }
+
+export async function getMyNotifications() {
+  return apiFetch('/api/v1/auth/me/notifications');
+}

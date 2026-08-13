@@ -244,9 +244,8 @@ export default function RouteView() {
   const isIdleMode = isUnscheduled || ['offline', 'completed', 'weekend', 'idle'].includes(tripStatus);
 
   // Build timeline from stops + visit history
-  // Only show visited data when a trip is actively running to avoid stale morning data showing all afternoon
-  const visitedStops = isActive ? (routeHistory?.visitedStops || {}) : {};
-  const arrivalTimes = isActive ? (routeHistory?.arrivalTimes || {}) : {};
+  const visitedStops = React.useMemo(() => isActive ? (routeHistory?.visitedStops || {}) : {}, [isActive, routeHistory?.visitedStops]);
+  const arrivalTimes = React.useMemo(() => isActive ? (routeHistory?.arrivalTimes || {}) : {}, [isActive, routeHistory?.arrivalTimes]);
 
   // Helper: parse time string like "07:30 AM" → minutes since midnight for sorting
   const timeToMins = (t) => {
@@ -258,18 +257,15 @@ export default function RouteView() {
     return h * 60 + m;
   };
 
-  // Filter stops for current direction, then sort by scheduled time ascending:
-  // Morning: Central Poly (07:30 AM) → DUK (09:20 AM)
-  // Evening: DUK (05:40 PM) → Central Poly (07:30 PM)
-  const stopsFiltered = stops.filter(s =>
-    direction === 'forward' ? !!s.morning_time : !!s.evening_time
-  );
-  const stopsToShow = direction === 'forward'
-    ? [...stopsFiltered].sort((a, b) => timeToMins(a.morning_time) - timeToMins(b.morning_time))
-    : [...stopsFiltered].sort((a, b) => timeToMins(a.evening_time) - timeToMins(b.evening_time));
+  const stopsToShow = React.useMemo(() => {
+    const stopsFiltered = stops.filter(s => direction === 'forward' ? !!s.morning_time : !!s.evening_time);
+    return direction === 'forward'
+      ? [...stopsFiltered].sort((a, b) => timeToMins(a.morning_time) - timeToMins(b.morning_time))
+      : [...stopsFiltered].sort((a, b) => timeToMins(a.evening_time) - timeToMins(b.evening_time));
+  }, [stops, direction]);
 
   // Find "current next stop" = first unvisited stop
-  const currentNextIdx = stopsToShow.findIndex(s => !visitedStops[s.name]);
+  const currentNextIdx = React.useMemo(() => stopsToShow.findIndex(s => !visitedStops[s.name]), [stopsToShow, visitedStops]);
   const visitedCount = Object.keys(visitedStops).length;
   const nextStop = currentNextIdx >= 0 ? stopsToShow[currentNextIdx] : null;
 

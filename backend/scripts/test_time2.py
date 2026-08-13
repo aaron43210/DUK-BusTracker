@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from datetime import timezone
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import get_settings

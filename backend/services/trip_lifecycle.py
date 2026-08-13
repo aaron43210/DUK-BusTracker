@@ -11,7 +11,7 @@ Time windows (IST):
 """
 import asyncio
 import logging
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
@@ -48,7 +48,7 @@ async def get_start_coords(db: AsyncSession, direction: str) -> tuple[float, flo
     Reads admin-configured role from DB; falls back to index-based coords if none set.
     """
     col = BusStop.is_morning_origin if direction == "forward" else BusStop.is_evening_origin
-    result = await db.execute(select(BusStop).where(col == True).limit(1))
+    result = await db.execute(select(BusStop).where(col.is_(True)).limit(1))
     stop = result.scalar_one_or_none()
     if stop:
         return (float(stop.lat), float(stop.lon))
@@ -73,7 +73,7 @@ async def get_destination_coords(db: AsyncSession, direction: str) -> tuple[floa
     Reads admin-configured role from DB; falls back to index-based coords if none set.
     """
     col = BusStop.is_morning_destination if direction == "forward" else BusStop.is_evening_destination
-    result = await db.execute(select(BusStop).where(col == True).limit(1))
+    result = await db.execute(select(BusStop).where(col.is_(True)).limit(1))
     stop = result.scalar_one_or_none()
     if stop:
         return (float(stop.lat), float(stop.lon))

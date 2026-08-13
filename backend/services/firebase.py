@@ -81,8 +81,8 @@ async def broadcast_to_all_users(db, title: str, body: str, data: Optional[dict]
     result = await db.execute(
         select(User.device_token).where(
             User.device_token.isnot(None),
-            User.notifications_on == True,
-            User.verified == True,
+            User.notifications_on.is_(True),
+            User.verified.is_(True),
         )
     )
     tokens = [row[0] for row in result.fetchall() if row[0]]

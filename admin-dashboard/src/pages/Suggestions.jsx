@@ -42,7 +42,7 @@ export default function Suggestions() {
   // handleDelete: confirm → DELETE /admin/api/suggestions/:id → update local state
   async function handleDelete(id) {
     // window.confirm: native browser confirmation dialog
-    if (!window.confirm('Remove this suggestion? This cannot be undone.')) return;
+    if (!window.confirm('Delete this suggestion? This cannot be undone.')) return;
 
     setDeleteId(id); // mark this row as deleting → its button shows loading text
     try {
@@ -143,9 +143,9 @@ export default function Suggestions() {
               </thead>
               <tbody>
                 {/* .map() renders one row per suggestion */}
-                {items.map(s => (
+                {items.map((s, index) => (
                   <tr key={s.id}>
-                    <td><code>#{s.id}</code></td>
+                    <td><code>#{index + 1}</code></td>
                     <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                       {fmt(s.created_at)}
                     </td>
@@ -190,7 +190,7 @@ export default function Suggestions() {
                           onClick={() => handleDelete(s.id)}
                           disabled={deleteId === s.id}
                         >
-                          {deleteId === s.id ? '…' : 'Remove'}
+                          {deleteId === s.id ? '…' : 'Delete'}
                         </button>
                       </div>
                     </td>

@@ -4,7 +4,7 @@ Uses Haversine distance (more accurate than the old Euclidean approach).
 """
 import math
 from typing import Optional
-from services.osrm_client import get_osrm_distance_m, get_osrm_distance_matrix_m
+from services.osrm_client import get_osrm_distance_matrix_m
 
 
 # Keep haversine_km for legacy synchronous calls if any still exist outside this module

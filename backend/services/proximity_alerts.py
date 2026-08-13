@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone, time
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 
 from constants import IST_OFFSET
 from services.osrm_client import get_osrm_route
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 # Scheduled arrival times (IST) — bus is considered "late" if ETA > these + LATE_THRESHOLD_MIN
 SCHEDULED_ARRIVAL = {
-    "forward": time(9, 30),   # Morning: should arrive DUK by 09:30 IST
+    "forward": time(9, 00),   # Morning: should arrive DUK by 09:30 IST
     "reverse": time(19, 30),  # Evening: should arrive Central Poly by 19:30 IST
 }
 
@@ -132,28 +132,27 @@ async def run_proximity_alerts(
 ) -> int:
     """
     Main proximity alert engine. Called on every GPS update during an active trip.
-    Checks all opted-in users to see if the bus has crossed their alert threshold.
-
-    Groups users by their boarding stop to avoid redundant OSRM queries
-    (one OSRM call per unique stop, not one per user).
-
+    Checks opted-in users to see if the bus has reached their specified alert stops
+    (boarding_alert_stop_id and/or destination_alert_stop_id).
+    
     Returns the number of notifications sent.
     """
     from models.user import User
     from models.route import BusStop
     from services.firebase import send_push_notification
+    from services.geofence import haversine_km
 
-    # Fetch all opted-in, verified users with a device token who haven't been
-    # alerted for this trip yet
+    # 1) Fetch all opted-in, verified users who have at least one alert stop configured
     result = await db.execute(
         select(User).where(
             and_(
                 User.proximity_alert_enabled == True,
                 User.verified == True,
                 User.device_token.isnot(None),
-                User.boarding_stop_id.isnot(None),
-                # Don't alert again for the same trip
-                (User.last_alerted_trip_id != trip.id) | User.last_alerted_trip_id.is_(None),
+                or_(
+                    User.boarding_alert_stop_id.isnot(None),
+                    User.destination_alert_stop_id.isnot(None)
+                )
             )
         )
     )
@@ -161,95 +160,74 @@ async def run_proximity_alerts(
     if not users:
         return 0
 
-    # Group users by stop_id to avoid duplicate OSRM calls
-    stops_to_check: dict[int, list] = {}
+    # 2) Gather unique alert stop IDs across all users
+    unique_stop_ids = set()
     for u in users:
-        stops_to_check.setdefault(u.boarding_stop_id, []).append(u)
+        if u.boarding_alert_stop_id and (u.last_alerted_trip_id != trip.id):
+            unique_stop_ids.add(u.boarding_alert_stop_id)
+        if u.destination_alert_stop_id and (u.last_dest_alerted_trip_id != trip.id):
+            unique_stop_ids.add(u.destination_alert_stop_id)
 
-    # Fetch all relevant stop metadata in one query
-    stop_ids  = list(stops_to_check.keys())
+    if not unique_stop_ids:
+        return 0
+
+    # 3) Fetch stop metadata for the required stops
     stops_res = await db.execute(
-        select(BusStop).where(BusStop.id.in_(stop_ids))
+        select(BusStop).where(BusStop.id.in_(unique_stop_ids))
     )
     stop_map = {s.id: s for s in stops_res.scalars().all()}
 
+    # 4) Determine which stops the bus has reached (within 400m haversine)
+    reached_stop_ids = set()
+    for stop_id, stop in stop_map.items():
+        # Check direct distance
+        dist_km = haversine_km(bus_lat, bus_lon, stop.lat, stop.lon)
+        if dist_km <= 0.4:  # 400 meters
+            reached_stop_ids.add(stop_id)
+
+    if not reached_stop_ids:
+        return 0
+
     sent_count = 0
+    # Group users by the reached stops so we can send push notifications in bulk
+    boarding_alerts = {}     # stop_id -> list of users
+    destination_alerts = {}  # stop_id -> list of users
 
-    for stop_id, stop_users in stops_to_check.items():
-        stop = stop_map.get(stop_id)
-        if not stop:
-            continue
+    for u in users:
+        # Check boarding alert
+        if u.boarding_alert_stop_id in reached_stop_ids and u.last_alerted_trip_id != trip.id:
+            boarding_alerts.setdefault(u.boarding_alert_stop_id, []).append(u)
+        
+        # Check destination alert
+        if u.destination_alert_stop_id in reached_stop_ids and u.last_dest_alerted_trip_id != trip.id:
+            destination_alerts.setdefault(u.destination_alert_stop_id, []).append(u)
 
-        # Use the first user's alert config — all users at the same stop share
-        # the same physical distance so the trigger condition is the same for all.
-        sample_user = stop_users[0]
-        alert_type  = sample_user.proximity_alert_type
-        alert_value = sample_user.proximity_alert_value
-
-        if not alert_type or not alert_value:
-            continue
-
-        triggered    = False
-        debug_metric = None
-
-        if alert_type == "distance":
-            # Real road distance via OSRM
-            route_info = await get_osrm_route(bus_lat, bus_lon, stop.lat, stop.lon)
-            dist_m     = route_info["distance_m"]
-            if dist_m <= alert_value:
-                triggered    = True
-                debug_metric = f"{dist_m:.0f}m road distance (OSRM={'yes' if route_info['from_osrm'] else 'fallback'})"
-
-        elif alert_type == "time":
-            # Drive-time via OSRM (seconds → minutes)
-            route_info = await get_osrm_route(bus_lat, bus_lon, stop.lat, stop.lon)
-            eta_min    = route_info["duration_s"] / 60.0
-            if eta_min <= alert_value:
-                triggered    = True
-                debug_metric = f"{eta_min:.1f} min ETA (OSRM={'yes' if route_info['from_osrm'] else 'fallback'})"
-
-        elif alert_type == "stops" and current_stop_order is not None:
-            # Simple stop-count — no OSRM needed
-            stops_away = await _stops_between(
-                db, current_stop_order, stop.order_index, stop.route_id
-            )
-            if stops_away <= alert_value:
-                triggered    = True
-                debug_metric = f"{stops_away} stops away"
-
-        if not triggered:
-            continue
-
-        # Build the notification message
-        if alert_type == "distance":
-            dist_km = alert_value / 1000
-            body = f"🚌 The bus is about {dist_km:.1f} km away from {stop.name} by road!"
-        elif alert_type == "time":
-            body = f"🚌 The bus is about {alert_value} minutes away from {stop.name}!"
-        else:
-            body = f"🚌 The bus is {alert_value} stop(s) away from {stop.name}!"
-
-        title = "Bus Approaching! 🚌"
-
-        # Fire FCM push notification to all opted-in users at this stop
+    # 5) Send notifications and update DB
+    for stop_id, stop_users in boarding_alerts.items():
+        stop = stop_map[stop_id]
         tokens = [u.device_token for u in stop_users if u.device_token]
         if tokens:
-            await send_push_notification(tokens, title, body, {
-                "type":    "proximity",
-                "stop_id": str(stop_id),
-                "stop_name": stop.name,
-                "trip_id": str(trip.id),
+            await send_push_notification(tokens, "Bus Approaching! 🚌", f"The bus has reached {stop.name}, your selected boarding alert stop!", {
+                "type": "proximity", "stop_id": str(stop_id), "trip_id": str(trip.id)
             })
-
-            # Mark each user as alerted for this trip so we don't spam them
             for u in stop_users:
                 u.last_alerted_trip_id = trip.id
-
-            await db.commit()
             sent_count += len(tokens)
-            logger.info(
-                "[PROXIMITY] Alert sent to %d user(s) at '%s' (%s). Metric: %s",
-                len(tokens), stop.name, alert_type, debug_metric,
-            )
+            logger.info(f"[PROXIMITY] Sent boarding alert to {len(tokens)} users for stop {stop.name}")
+
+    for stop_id, stop_users in destination_alerts.items():
+        stop = stop_map[stop_id]
+        tokens = [u.device_token for u in stop_users if u.device_token]
+        if tokens:
+            await send_push_notification(tokens, "Destination Approaching! 🚌", f"The bus has reached {stop.name}, your selected destination alert stop!", {
+                "type": "proximity", "stop_id": str(stop_id), "trip_id": str(trip.id)
+            })
+            for u in stop_users:
+                u.last_dest_alerted_trip_id = trip.id
+            sent_count += len(tokens)
+            logger.info(f"[PROXIMITY] Sent destination alert to {len(tokens)} users for stop {stop.name}")
+
+    if sent_count > 0:
+        await db.commit()
 
     return sent_count

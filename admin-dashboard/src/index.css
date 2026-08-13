@@ -631,7 +631,9 @@ code {
   border: 1px solid var(--border);
   /* clean border                        */
   border-radius: var(--radius-lg);
-  padding: 0;
+  padding: 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
   width: 560px;
   max-width: 92vw;
   max-height: 90vh;
@@ -651,8 +653,8 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0;
-  padding-bottom: 16px;
+  margin: -24px -24px 20px -24px;
+  padding: 24px 24px 16px 24px;
   border-bottom: 1px solid var(--border);
   /* separator between header and body */
 }
@@ -684,8 +686,8 @@ code {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  margin-top: 0;
-  padding-top: 16px;
+  margin: 20px -24px -24px -24px;
+  padding: 16px 24px 24px 24px;
   border-top: 1px solid var(--border);
   /* separator above the footer buttons */
 }

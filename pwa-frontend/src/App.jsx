@@ -20,6 +20,7 @@ import OtpVerify from './pages/OtpVerify';
 import RouteView from './pages/RouteView';
 import MapFull from './pages/MapFull';
 import Settings from './pages/Settings';
+import Help from './pages/Help';
 
 // ── Toast context ──────────────────────────────────────────────────────────
 export const ToastContext = createContext(null);
@@ -231,11 +232,19 @@ function NotificationProvider({ children }) {
 
   const clearNotifications = useCallback(() => setNotifications([]), []);
 
+  const showToast = useToast();
+
   // Listen for foreground FCM messages and push them into the drawer
   useEffect(() => {
-    const unsub = onForegroundMessage((msg) => addNotification(msg));
+    const unsub = onForegroundMessage((msg) => {
+      addNotification(msg);
+      // Show brief toast so user sees it actively
+      if (msg && msg.title) {
+        showToast(msg.title, 'info');
+      }
+    });
     return unsub;
-  }, [addNotification]);
+  }, [addNotification, showToast]);
 
   return (
     <NotificationContext.Provider value={{ notifications, addNotification, clearNotifications }}>
@@ -264,6 +273,7 @@ function AppShell() {
         <Route path="/route"    element={<RequireAuth><RouteView /></RequireAuth>} />
         <Route path="/map"      element={<RequireAuth><MapFull /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+        <Route path="/help"     element={<RequireAuth><Help /></RequireAuth>} />
 
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

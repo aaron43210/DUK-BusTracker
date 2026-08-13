@@ -3,7 +3,7 @@ scripts/fetch_live_gps.py — Fetch and watch live GPS points directly from Supa
 """
 import time
 import requests
-import json
+
 
 SUPABASE_URL = "https://mtkdzcdzxtfjwpgnpujc.supabase.co"
 SUPABASE_KEY = (

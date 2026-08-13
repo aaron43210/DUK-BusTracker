@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, Bell, AlertTriangle, CheckCircle, Info, Trash2 } from 'lucide-react';
 import { useNotifications } from '../App';
+import { getMyNotifications } from '../api';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -9,6 +10,7 @@ function typeFromData(data) {
   if (!data) return 'info';
   if (data.type === 'eta_late') return 'warning';
   if (data.type === 'proximity') return 'success';
+  if (data.type === 'suggestion') return 'success';
   return 'info';
 }
 
@@ -32,10 +34,41 @@ const getIcon = (type) => {
 
 export default function NotificationDrawer({ isOpen, onClose }) {
   const overlayRef = useRef(null);
-  const { notifications, clearNotifications } = useNotifications();
+  const { notifications: contextNotifications, clearNotifications } = useNotifications();
+  const [historyNotifications, setHistoryNotifications] = useState([]);
+  const [dismissedIds, setDismissedIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dismissed_notifications');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const handleDismiss = (id) => {
+    setDismissedIds(prev => {
+      const next = [...prev, id];
+      localStorage.setItem('dismissed_notifications', JSON.stringify(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? 'hidden' : '';
+    if (isOpen) {
+      getMyNotifications().then(data => {
+        if (data && data.notifications) {
+          const formatted = data.notifications.map(n => ({
+            id: n.id,
+            title: n.notification?.title || 'Notification',
+            body: n.notification?.body || '',
+            time: n.time ? new Date(n.time) : new Date(),
+            data: { type: n.type }
+          }));
+          setHistoryNotifications(formatted);
+        }
+      }).catch(err => console.error('Failed to load notification history', err));
+    }
     return () => { document.body.style.overflow = ''; };
   }, [isOpen]);
 
@@ -43,66 +76,93 @@ export default function NotificationDrawer({ isOpen, onClose }) {
     if (e.target === overlayRef.current) onClose();
   };
 
+  // Merge contextual (live) notifications and historical ones, avoiding duplicates by ID
+  const seenIds = new Set(contextNotifications.map(cn => cn.id));
+  let allNotifications = [...contextNotifications];
+  
+  historyNotifications.forEach(hn => {
+    if (!seenIds.has(hn.id)) {
+      allNotifications.push(hn);
+      seenIds.add(hn.id);
+    }
+  });
+  
+  // Filter out dismissed notifications using Set for O(1) lookups
+  const dismissedSet = new Set(dismissedIds);
+  allNotifications = allNotifications.filter(n => !dismissedSet.has(n.id));
+  allNotifications.sort((a, b) => b.time - a.time);
+
+  const handleClearAll = () => {
+    const idsToDismiss = allNotifications.map(n => n.id);
+    setDismissedIds(prev => {
+      const next = [...new Set([...prev, ...idsToDismiss])];
+      localStorage.setItem('dismissed_notifications', JSON.stringify(next));
+      return next;
+    });
+    clearNotifications();
+  };
+
+  if (!isOpen) return null;
+
   return (
-    <>
+    <div className="modal-overlay" onClick={handleOverlayClick}>
       <div
-        className={`drawer-overlay ${isOpen ? 'drawer-overlay--open' : ''}`}
-        ref={overlayRef}
-        onClick={handleOverlayClick}
-        aria-hidden={!isOpen}
-      />
-      <div
-        className={`notification-drawer ${isOpen ? 'notification-drawer--open' : ''}`}
+        className="modal-content notification-modal"
         role="dialog"
         aria-label="Notifications"
-        aria-hidden={!isOpen}
+        onClick={e => e.stopPropagation()}
+        style={{ padding: '24px', display: 'flex', flexDirection: 'column', maxHeight: '80vh' }}
       >
-        <div className="notification-drawer__header">
-          <div className="notification-drawer__title">
-            <Bell size={20} />
-            <span>Notifications</span>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {notifications.length > 0 && (
-              <button
-                className="topbar__icon-btn"
-                onClick={clearNotifications}
-                aria-label="Clear all notifications"
-                title="Clear all"
-              >
-                <Trash2 size={18} />
-              </button>
-            )}
-            <button className="drawer__close" onClick={onClose} aria-label="Close notifications">
-              <X size={24} />
+        <button className="modal-close" onClick={onClose} aria-label="Close notifications">
+          <X size={20} />
+        </button>
+        
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+          <h2 className="modal-title" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Bell size={20} /> Notifications
+          </h2>
+          {allNotifications.length > 0 && (
+            <button
+              className="btn btn--primary"
+              onClick={handleClearAll}
+              style={{ padding: '6px 12px', fontSize: '12px', width: 'auto' }}
+            >
+              Clear all
             </button>
-          </div>
+          )}
         </div>
 
-        <div className="notification-drawer__content">
-          {notifications.length > 0 ? (
+        <div className="notification-drawer__content" style={{ overflowY: 'auto', padding: '0 4px', margin: '0 -4px' }}>
+          {allNotifications.length > 0 ? (
             <div className="notification-list">
-              {notifications.map((notif) => {
-                const type = typeFromData(notif.data) ;
+              {allNotifications.map((notif) => {
+                const type = typeFromData(notif.data);
                 return (
                   <div key={notif.id} className="notification-item notification-item--unread">
                     <div className="notification-item__icon-wrapper">
                       {getIcon(type)}
                     </div>
-                    <div className="notification-item__details">
+                    <div className="notification-item__details" style={{ flex: 1, marginRight: '12px' }}>
                       <div className="notification-item__header">
                         <h4 className="notification-item__title">{notif.title}</h4>
                         <span className="notification-item__time">{relativeTime(notif.time)}</span>
                       </div>
                       <p className="notification-item__msg">{notif.body}</p>
                     </div>
+                    <button 
+                      onClick={() => handleDismiss(notif.id)}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', padding: '4px' }}
+                      aria-label="Remove notification"
+                    >
+                      <X size={16} />
+                    </button>
                     <div className="notification-item__unread-dot" />
                   </div>
                 );
               })}
             </div>
           ) : (
-            <div className="notification-empty">
+            <div className="notification-empty" style={{ padding: '40px 0' }}>
               <Bell size={48} className="notification-empty__icon" />
               <p className="notification-empty__text">No new notifications yet.</p>
               <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '8px' }}>
@@ -112,6 +172,6 @@ export default function NotificationDrawer({ isOpen, onClose }) {
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }
