@@ -172,7 +172,7 @@ export default function Suggestions() {
                       </span>
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: '6px', flexDirection: 'column' }}>
+                      <div style={{ display: 'flex', gap: '6px', flexDirection: 'column', alignItems: 'center' }}>
                         {s.status !== 'approved' && s.status !== 'rejected' && (
                           <button
                             className="btn btn-primary btn-sm"

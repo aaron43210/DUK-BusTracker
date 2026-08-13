@@ -239,15 +239,31 @@ async def trip_state(db: AsyncSession = Depends(get_db)):
 
         scheduled_trips = [t for t in trips if t.status == "scheduled"]
         if scheduled_trips:
-            scheduled_trips.sort(key=lambda x: 0 if x.direction in ("forward", "morning", "Morning") else 1)
-            target_trip = scheduled_trips[0]
-            is_morning = target_trip.direction in ("forward", "morning", "Morning")
+            # Check if any scheduled trip matches the current active window
+            active_target = None
+            for t in scheduled_trips:
+                is_m = t.direction in ("forward", "morning", "Morning")
+                if is_m and (MORNING_START_MINS <= time_mins <= MORNING_END_MINS):
+                    active_target = t
+                    break
+                elif not is_m and (EVENING_START_MINS <= time_mins <= EVENING_END_MINS):
+                    active_target = t
+                    break
             
-            is_active_window = False
-            if is_morning and (MORNING_START_MINS <= time_mins <= MORNING_END_MINS):
+            if active_target:
+                target_trip = active_target
+                is_morning = target_trip.direction in ("forward", "morning", "Morning")
                 is_active_window = True
-            elif not is_morning and (EVENING_START_MINS <= time_mins <= EVENING_END_MINS):
-                is_active_window = True
+            else:
+                # If no active window, pick best upcoming trip
+                scheduled_trips.sort(key=lambda x: 0 if x.direction in ("forward", "morning", "Morning") else 1)
+                if time_mins > MORNING_END_MINS:
+                    evening_trips = [t for t in scheduled_trips if t.direction not in ("forward", "morning", "Morning")]
+                    target_trip = evening_trips[0] if evening_trips else scheduled_trips[0]
+                else:
+                    target_trip = scheduled_trips[0]
+                is_morning = target_trip.direction in ("forward", "morning", "Morning")
+                is_active_window = False
                 
             if is_active_window:
                 display_trip = "Unscheduled" if is_deviated else format_trip_name(target_trip.direction)

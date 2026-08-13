@@ -31,8 +31,9 @@ function getMsg() {
 async function saveTokenToBackend(token) {
   const jwt = localStorage.getItem('duk_jwt_token');
   if (!jwt || !token) return;
+  const BASE = import.meta.env.VITE_API_URL || '';
   try {
-    await fetch('/auth/device-token', {
+    await fetch(`${BASE}/auth/device-token`, {
       method:  'PUT',
       headers: {
         'Content-Type':  'application/json',
