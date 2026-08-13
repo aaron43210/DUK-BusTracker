@@ -936,17 +936,13 @@ async def send_broadcast(
     # 1. Send Push Notifications (urgent or non-urgent)
     result = await broadcast_to_all_users(db, req.title, req.body, urgent=req.is_urgent)
 
-    # 2. Fan-out InAppNotifications to all verified users
-    users_query = await db.execute(select(User.id).where(User.verified.is_(True)))
-    user_ids = [row[0] for row in users_query.fetchall()]
-    
     in_app_notifs = [
         InAppNotification(
-            user_id=uid,
+            user_id=None,
             title=req.title,
             body=req.body,
             type='admin_broadcast'
-        ) for uid in user_ids
+        )
     ]
     db.add_all(in_app_notifs)
 

@@ -279,7 +279,7 @@ export default function RouteView() {
   // ── Idle mode detection ───────────────────────────────────────────────────
   // Idle = no useful timeline to show. 
   // We rely on the backend's `tripStatus` which already accounts for dead hours, weekends, etc.
-  const isIdleMode = ['offline', 'weekend', 'idle', 'completed'].includes(tripStatus);
+  const isIdleMode = ['offline', 'weekend', 'idle', 'completed', 'waiting'].includes(tripStatus) || isUnscheduled;
 
   // Build timeline from stops + visit history
   const visitedStops = React.useMemo(() => showHistory ? (routeHistory?.visitedStops || {}) : {}, [showHistory, routeHistory?.visitedStops]);
