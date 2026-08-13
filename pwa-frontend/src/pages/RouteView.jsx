@@ -21,7 +21,7 @@ import {
   haversineDistKm, todayStr, parseTimeToMinutes,
 } from '../timetable';
 
-import { SplashContext } from '../App';
+import { SplashContext, useNotifications } from '../App';
 
 const POLL_MS = 15000;
 
@@ -51,8 +51,13 @@ let routeViewLoadedOnce = false;
 export default function RouteView() {
   const navigate = useNavigate();
   const { setSplashReady } = useContext(SplashContext);
+  const { checkNotifications } = useNotifications();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [pullY, setPullY] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const startYRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [tripState, setTripState] = useState(null);
@@ -146,6 +151,40 @@ export default function RouteView() {
     };
   }, []);
 
+
+  const handleTouchStart = (e) => {
+    if (scrollContainerRef.current && scrollContainerRef.current.scrollTop === 0) {
+      startYRef.current = e.touches[0].clientY;
+    } else {
+      startYRef.current = null;
+    }
+  };
+
+  const handleTouchMove = (e) => {
+    if (startYRef.current !== null) {
+      const y = e.touches[0].clientY;
+      const dy = y - startYRef.current;
+      if (dy > 0 && dy < 150) {
+        setPullY(dy);
+      }
+    }
+  };
+
+  const handleTouchEnd = async () => {
+    if (pullY > 60) {
+      setIsPulling(true);
+      await Promise.allSettled([
+        fetchAll(false),
+        checkNotifications()
+      ]);
+      await new Promise(r => setTimeout(r, 500)); // Ensure spinner shows briefly
+      setPullY(0);
+      setIsPulling(false);
+    } else {
+      setPullY(0);
+    }
+    startYRef.current = null;
+  };
 
   const fetchAll = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -462,8 +501,40 @@ export default function RouteView() {
       <DrawerMenu isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
       <NotificationDrawer isOpen={notificationOpen} onClose={() => setNotificationOpen(false)} />
 
-      <div className="route-view-ios">
-        <div className="route-view-ios__scroll">
+      <div className="route-view-ios" style={{ position: 'relative', overflow: 'hidden' }}>
+        {/* Pull to refresh indicator */}
+        <div 
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '60px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: pullY > 10 ? Math.min(1, pullY / 60) : 0,
+            transform: `translateY(${(isPulling ? 60 : pullY) - 60}px)`,
+            transition: isPulling || pullY === 0 ? 'transform 0.3s ease-out, opacity 0.3s ease-out' : 'none',
+            zIndex: 1
+          }}
+        >
+          <div className="spinner" style={{ width: 24, height: 24, borderTopColor: '#007AFF', borderWidth: 2 }} />
+        </div>
+
+        <div 
+          className="route-view-ios__scroll"
+          ref={scrollContainerRef}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          style={{ 
+            transform: `translateY(${isPulling ? 60 : pullY}px)`, 
+            transition: isPulling || pullY === 0 ? 'transform 0.3s ease-out' : 'none',
+            zIndex: 2,
+            position: 'relative'
+          }}
+        >
 
           {/* Header Row */}
           <div className="ios-header-row">

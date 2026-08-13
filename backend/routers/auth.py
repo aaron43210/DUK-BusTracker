@@ -145,7 +145,8 @@ async def update_device_token(
     user_id: str = Depends(get_current_user_id),
 ):
     """Store/update the FCM device token for push notifications."""
-    result = await db.execute(select(User).where(User.id == user_id))
+    user_uuid = uuid.UUID(user_id)
+    result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -170,7 +171,8 @@ async def update_preferences(
     if not current_user_id:
         raise HTTPException(status_code=401, detail="Authentication required.")
 
-    result = await db.execute(select(User).where(User.id == current_user_id))
+    user_uuid = uuid.UUID(current_user_id)
+    result = await db.execute(select(User).where(User.id == user_uuid))
     user   = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -195,59 +197,3 @@ async def update_preferences(
     }
 
 
-@router.get("/me/notifications")
-async def get_my_notifications(
-    db: AsyncSession = Depends(get_db), 
-    current_user_id: UUID = Depends(get_current_user_id)
-):
-    """Fetch persistent notifications (suggestion responses and broadcasts) for the current user."""
-    from models.notification import Suggestion, AdminBroadcast
-    from sqlalchemy import desc
-    
-    if not current_user_id:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-        
-    # Get user's suggestions with responses
-    s_result = await db.execute(
-        select(Suggestion)
-        .where(Suggestion.user_id == current_user_id, Suggestion.admin_response.isnot(None))
-        .order_by(desc(Suggestion.id))
-        .limit(20)
-    )
-    suggestions = s_result.scalars().all()
-    
-    items = []
-    for s in suggestions:
-        title = "Response to your suggestion"
-        body = f"Admin ({s.status}): {s.admin_response}"
-        items.append({
-            "id": f"sugg_{s.id}",
-            "notification": {
-                "title": title,
-                "body": body
-            },
-            "time": s.created_at.isoformat() if s.created_at else None,
-            "type": "suggestion"
-        })
-        
-    # Get recent admin broadcasts
-    b_result = await db.execute(
-        select(AdminBroadcast)
-        .order_by(desc(AdminBroadcast.id))
-        .limit(10)
-    )
-    broadcasts = b_result.scalars().all()
-    for b in broadcasts:
-        items.append({
-            "id": f"bc_{b.id}",
-            "notification": {
-                "title": b.title,
-                "body": b.body
-            },
-            "time": b.sent_at.isoformat() if b.sent_at else None,
-            "type": "broadcast"
-        })
-        
-    # Sort descending by time
-    items.sort(key=lambda x: x["time"] or "", reverse=True)
-    return {"notifications": items[:30]}
