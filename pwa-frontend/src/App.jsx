@@ -27,7 +27,7 @@ export const ToastContext = createContext(null);
 export function useToast() { return useContext(ToastContext); }
 
 // ── Notification context — live in-app push messages ───────────────────────
-export const NotificationContext = createContext({ notifications: [], addNotification: () => { }, clearNotifications: () => { }, hasUnread: false, markRead: () => { } });
+export const NotificationContext = createContext({ notifications: [], addNotification: () => { }, clearNotifications: () => { }, hasUnread: false, markRead: () => { }, checkNotifications: async () => {} });
 export function useNotifications() { return useContext(NotificationContext); }
 
 function ToastProvider({ children }) {
@@ -225,10 +225,16 @@ function NotificationProvider({ children }) {
   const [hasUnread, setHasUnread] = useState(false);
 
   const addNotification = useCallback((notif) => {
-    setNotifications((prev) => [
-      { id: Date.now(), ...notif, time: new Date() },
-      ...prev,
-    ].slice(0, 50)); // keep max 50
+    setNotifications((prev) => {
+      // Avoid duplicate live notifications if we already loaded it from history (or if it fired twice)
+      const notifId = notif.data?.id ? parseInt(notif.data.id, 10) : Date.now();
+      if (prev.some(n => n.id === notifId)) return prev;
+
+      return [
+        { id: notifId, ...notif, time: new Date() },
+        ...prev,
+      ].slice(0, 50); // keep max 50
+    });
     setHasUnread(true);
   }, []);
 
@@ -256,10 +262,9 @@ function NotificationProvider({ children }) {
     return unsub;
   }, [addNotification, showToast]);
 
-  // Check for historical unread notifications on mount
-  useEffect(() => {
-    import('./api').then(({ getMyNotifications }) => {
-      getMyNotifications().then(data => {
+  const checkNotifications = useCallback(() => {
+    return import('./api').then(({ getMyNotifications }) => {
+      return getMyNotifications().then(data => {
         if (data && data.notifications && data.notifications.length > 0) {
           const lastRead = parseInt(localStorage.getItem('last_read_time') || '0', 10);
           const hasNew = data.notifications.some(n => {
@@ -274,8 +279,15 @@ function NotificationProvider({ children }) {
     }).catch(() => { });
   }, []);
 
+  // Check for historical unread notifications on mount and periodically
+  useEffect(() => {
+    checkNotifications();
+    const intervalId = setInterval(checkNotifications, 15000);
+    return () => clearInterval(intervalId);
+  }, [checkNotifications]);
+
   return (
-    <NotificationContext.Provider value={{ notifications, addNotification, clearNotifications, hasUnread, markRead }}>
+    <NotificationContext.Provider value={{ notifications, addNotification, clearNotifications, hasUnread, markRead, checkNotifications }}>
       {children}
     </NotificationContext.Provider>
   );

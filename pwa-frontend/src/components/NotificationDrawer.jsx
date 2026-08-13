@@ -1,18 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Bell, AlertTriangle, CheckCircle, Info, Trash2 } from 'lucide-react';
+import { X, Bell } from 'lucide-react';
 import { useNotifications } from '../App';
 import { getMyNotifications, markNotificationRead } from '../api';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Map FCM data.type to a visual icon variant */
-function typeFromData(data) {
-  if (!data) return 'info';
-  if (data.type === 'eta_late') return 'warning';
-  if (data.type === 'proximity') return 'success';
-  if (data.type === 'suggestion' || data.type === 'suggestion_response') return 'success';
-  return 'info';
-}
 
 function relativeTime(date) {
   const diff = Math.floor((Date.now() - date) / 1000);
@@ -21,14 +12,6 @@ function relativeTime(date) {
   if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`;
   return date.toLocaleDateString();
 }
-
-const getIcon = (type) => {
-  switch (type) {
-    case 'warning': return <AlertTriangle size={18} className="notification-icon--warning" />;
-    case 'success': return <CheckCircle   size={18} className="notification-icon--success" />;
-    default:        return <Info          size={18} className="notification-icon--info" />;
-  }
-};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -132,8 +115,8 @@ export default function NotificationDrawer({ isOpen, onClose }) {
         </button>
         
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <h2 className="modal-title" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Bell size={20} /> Notifications
+          <h2 className="modal-title" style={{ marginBottom: 0 }}>
+            Notifications
           </h2>
           {allNotifications.length > 0 && (
             <button
@@ -150,7 +133,6 @@ export default function NotificationDrawer({ isOpen, onClose }) {
           {allNotifications.length > 0 ? (
             <div className="notification-list">
               {allNotifications.map((notif) => {
-                const type = typeFromData(notif.data);
                 return (
                   <div key={notif.id} className="notification-item notification-item--unread">
                     <div className="notification-item__details" style={{ flex: 1, marginRight: '12px' }}>
@@ -167,7 +149,6 @@ export default function NotificationDrawer({ isOpen, onClose }) {
                     >
                       <X size={16} />
                     </button>
-                    <div className="notification-item__unread-dot" />
                   </div>
                 );
               })}

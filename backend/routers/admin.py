@@ -933,9 +933,6 @@ async def send_broadcast(
     from models.notification import AdminBroadcast, InAppNotification
     from models.user import User
     
-    # 1. Send Push Notifications (urgent or non-urgent)
-    result = await broadcast_to_all_users(db, req.title, req.body, urgent=req.is_urgent)
-
     in_app_notifs = [
         InAppNotification(
             user_id=None,
@@ -945,6 +942,10 @@ async def send_broadcast(
         )
     ]
     db.add_all(in_app_notifs)
+    await db.flush()
+
+    # 1. Send Push Notifications (urgent or non-urgent)
+    result = await broadcast_to_all_users(db, req.title, req.body, data={'type': 'admin_broadcast', 'id': str(in_app_notifs[0].id)}, urgent=req.is_urgent)
 
     # 3. Log the broadcast
     log = AdminBroadcast(title=req.title, body=req.body, target=req.target, sent_count=result.get("sent", 0))
@@ -1022,6 +1023,7 @@ async def update_suggestion(
             type='suggestion_response'
         )
         db.add(in_app_notif)
+        await db.flush()
         await db.commit()
         
         # Send live push notification so it appears in the app immediately
@@ -1031,6 +1033,7 @@ async def update_suggestion(
                     device_tokens=[user.device_token],
                     title=title,
                     body=body,
+                    data={'type': 'suggestion_response', 'id': str(in_app_notif.id)},
                     urgent=False
                 )
             except Exception as e:
