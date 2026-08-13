@@ -27,7 +27,7 @@ export const ToastContext = createContext(null);
 export function useToast() { return useContext(ToastContext); }
 
 // ── Notification context — live in-app push messages ───────────────────────
-export const NotificationContext = createContext({ notifications: [], addNotification: () => {}, clearNotifications: () => {}, hasUnread: false, markRead: () => {} });
+export const NotificationContext = createContext({ notifications: [], addNotification: () => { }, clearNotifications: () => { }, hasUnread: false, markRead: () => { } });
 export function useNotifications() { return useContext(NotificationContext); }
 
 function ToastProvider({ children }) {
@@ -191,7 +191,7 @@ function DeviceGate({ children }) {
 }
 
 // ── Splash Context & Provider (Dynamic App Load) ─────────────────────────
-export const SplashContext = createContext({ setSplashReady: () => {}, isAppReady: false, showSplash: true });
+export const SplashContext = createContext({ setSplashReady: () => { }, isAppReady: false, showSplash: true });
 
 function SplashProvider({ children }) {
   const [showSplash, setShowSplash] = useState(true);
@@ -271,7 +271,7 @@ function NotificationProvider({ children }) {
           }
         }
       }).catch(err => console.error('Failed to load initial notifications', err));
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   return (
@@ -287,7 +287,7 @@ function AppShell() {
 
   // Silently refresh the FCM device token on every app load
   useEffect(() => {
-    if (getToken()) refreshFcmToken().catch(() => {});
+    if (getToken()) refreshFcmToken().catch(() => { });
   }, []);
 
   return (
@@ -298,10 +298,10 @@ function AppShell() {
         <Route path="/otp" element={<OtpVerify />} />
 
         {/* Protected */}
-        <Route path="/route"    element={<RequireAuth><RouteView /></RequireAuth>} />
-        <Route path="/map"      element={<RequireAuth><MapFull /></RequireAuth>} />
+        <Route path="/route" element={<RequireAuth><RouteView /></RequireAuth>} />
+        <Route path="/map" element={<RequireAuth><MapFull /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
-        <Route path="/help"     element={<RequireAuth><Help /></RequireAuth>} />
+        <Route path="/help" element={<RequireAuth><Help /></RequireAuth>} />
 
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

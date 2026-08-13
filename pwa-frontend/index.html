@@ -34,7 +34,15 @@
     />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="splash-screen" style="position: absolute; inset: 0; z-index: 99999;">
+        <div class="splash-overlay"></div>
+        <div class="splash-content">
+          <div class="splash-loader"></div>
+          <div class="splash-text">Loading...</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

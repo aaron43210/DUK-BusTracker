@@ -15,7 +15,7 @@ import SuggestionsModal from './SuggestionsModal';
 import { HelpCircle, Info } from 'lucide-react';
 
 export default function DrawerMenu({ isOpen, onClose }) {
-  const navigate   = useNavigate();
+  const navigate = useNavigate();
   const overlayRef = useRef(null);
 
   const [user, setUser] = useState(null);
@@ -102,7 +102,7 @@ export default function DrawerMenu({ isOpen, onClose }) {
               <MessageSquare size={18} className="drawer__nav-icon" />
               <span>Send Feedback</span>
             </button>
-            
+
             <button
               className="drawer__nav-item"
               onClick={() => { onClose(); setIsAboutOpen(true); }}
@@ -112,10 +112,10 @@ export default function DrawerMenu({ isOpen, onClose }) {
             </button>
           </nav>
 
-        {/* Footer */}
-        <div className="drawer__footer">
-          <span className="drawer__version">DUK Bus Tracker v1.0 PWA</span>
-        </div>
+          {/* Footer */}
+          <div className="drawer__footer">
+            <span className="drawer__version">DUK Bus Tracker v1.0 PWA</span>
+          </div>
         </aside>
       </div>
 
