@@ -1,0 +1,21 @@
+services:
+  # 1. The Valhalla Routing Engine (Docker)
+  - type: web
+    name: bus-tracker-valhalla
+    env: docker
+    rootDir: valhalla-server
+    plan: free
+
+  # 2. The FastAPI Backend (Python)
+  - type: web
+    name: bus-tracker-backend
+    env: python
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT"
+    envVars:
+      - key: VALHALLA_URL
+        value: "https://bus-tracker-valhalla.onrender.com"
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+    plan: free
