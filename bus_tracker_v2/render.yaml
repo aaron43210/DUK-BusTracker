@@ -3,14 +3,14 @@ services:
   - type: web
     name: bus-tracker-valhalla
     env: docker
-    rootDir: valhalla-server
+    rootDir: bus_tracker_v2/valhalla-server
     plan: free
 
   # 2. The FastAPI Backend (Python)
   - type: web
     name: bus-tracker-backend
     env: python
-    rootDir: backend
+    rootDir: bus_tracker_v2/backend
     buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT"
     envVars:
