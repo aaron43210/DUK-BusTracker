@@ -121,4 +121,4 @@ ehthumbs.db
 *.ntvs*
 *.njsproj
 *.sln
-*Secrets*
+*Secrets*bus_tracker_v2/valhalla-server/custom_files/*.pbf

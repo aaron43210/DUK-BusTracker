@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  valhalla:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+    container_name: valhalla_local
+    ports:
+      - "8002:8002"
+    volumes:
+      - valhalla_data:/custom_files
+    environment:
+      # Data is provided locally in the custom_files folder
+      - build_elevation=False
+      - build_admins=False
+      - build_timezones=False
+
+volumes:
+  valhalla_data:
+    external: true
