@@ -1,0 +1,29 @@
+# Secrets — never commit
+.env
+firebase-service-account.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+uvicorn_err.log
+
+# Distribution / build
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Alembic (keep versions, ignore auto-generated junk)
+alembic/__pycache__/
