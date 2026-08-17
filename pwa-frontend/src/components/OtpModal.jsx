@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { verify, register, setApiToken } from '../api';
 import { saveToken, saveUser } from '../storage';
 import { useToast } from '../App';
+import { requestAndSaveFcmToken } from '../firebase';
 
 const CODE_LENGTH = 6;
 
@@ -64,6 +65,7 @@ export default function OtpModal({ isOpen, email, name, boardingStop, onClose })
       setApiToken(res.access_token);
       saveToken(res.access_token);
       saveUser(res.user);
+      requestAndSaveFcmToken().catch(() => {});
       navigate('/route', { replace: true });
     } catch (err) {
       setError(err.message || 'Invalid code. Please try again.');

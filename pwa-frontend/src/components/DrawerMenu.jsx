@@ -114,6 +114,10 @@ export default function DrawerMenu({ isOpen, onClose }) {
 
           {/* Footer */}
           <div className="drawer__footer">
+            <button className="drawer__logout" onClick={handleLogout}>
+              <LogOut size={18} />
+              <span>Log Out</span>
+            </button>
             <span className="drawer__version">DUK Bus Tracker v1.0 PWA</span>
           </div>
         </aside>

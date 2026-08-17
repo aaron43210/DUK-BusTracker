@@ -1,19 +1,24 @@
-import React from 'react';
+import React, { useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, MapPin, Bell, Settings, Search } from 'lucide-react';
+import { SplashContext } from '../App';
+import TopBar from '../components/TopBar';
 
 export default function Help() {
   const navigate = useNavigate();
+  const { setSplashReady } = useContext(SplashContext);
+
+  useEffect(() => {
+    setSplashReady();
+  }, [setSplashReady]);
 
   return (
     <div className="help-screen">
-      <header className="topbar">
-        <button className="topbar__btn" onClick={() => navigate(-1)} aria-label="Back">
-          <ArrowLeft size={22} />
-        </button>
-        <h1 className="topbar__title">Help & Guidelines</h1>
-        <div style={{ width: 44 }}></div>
-      </header>
+      <TopBar
+        showBack
+        onBack={() => navigate(-1)}
+        title="Help & Guidelines"
+      />
 
       <div className="help-content">
         <section className="help-section">

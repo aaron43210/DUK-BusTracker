@@ -1,6 +1,6 @@
 """models/trip.py — Trip model (one record per bus run per day)."""
 from sqlalchemy import (
-    Column, Integer, String, Date, DateTime, ForeignKey, Text, Boolean, JSON
+    Column, Integer, String, Date, DateTime, ForeignKey, Text, Boolean, JSON, Index
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -29,3 +29,7 @@ class Trip(Base):
     updated_at          = Column(DateTime(timezone=True), onupdate=func.now())
 
     route    = relationship("Route", back_populates="trips")
+
+    __table_args__ = (
+        Index("ix_trips_date_dir_status", "date", "direction", "status"),
+    )

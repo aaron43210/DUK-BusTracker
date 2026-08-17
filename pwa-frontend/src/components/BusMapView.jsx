@@ -140,9 +140,12 @@ export default function BusMapView({
     return () => {
       mapReadyRef.current  = false;
       stopsLayerRef.current = false;
+      if (busMarkerRef.current) {
+        busMarkerRef.current.remove();
+        busMarkerRef.current = null;
+      }
       map.remove();
       mapRef.current = null;
-      busMarkerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

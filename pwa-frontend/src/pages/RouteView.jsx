@@ -22,6 +22,7 @@ import {
 } from '../timetable';
 
 import { SplashContext, useNotifications } from '../App';
+import { globalStore, saveStoreToCache } from '../store';
 
 const POLL_MS = 15000;
 
@@ -60,15 +61,17 @@ export default function RouteView() {
   const scrollContainerRef = useRef(null);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [user, setUser] = useState(null);
-  const [tripState, setTripState] = useState(null);
-  const [busPosition, setBusPosition] = useState(null);
-  const [routeHistory, setRouteHistory] = useState(null);
+  const [tripState, setTripState] = useState(globalStore.tripState);
+  const [busPosition, setBusPosition] = useState(globalStore.busPosition);
+  const [routeHistory, setRouteHistory] = useState(globalStore.history);
   const [eta, setEta] = useState(null);
   const [etaTargetStopId, setEtaTargetStopId] = useState(null);
-  const [stops, setStops] = useState([]);
-  const [plannedCoords, setPlannedCoords] = useState([]);
+  const [stops, setStops] = useState(globalStore.stops);
+  const [plannedCoords, setPlannedCoords] = useState(globalStore.plannedCoords);
   const [trailCoords, setTrailCoords] = useState([]);
-  const [animatedBus, setAnimatedBus] = useState(null);
+  const [animatedBus, setAnimatedBus] = useState(
+    globalStore.busPosition ? [globalStore.busPosition.lon, globalStore.busPosition.lat] : null
+  );
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -77,6 +80,17 @@ export default function RouteView() {
   const animatorRef = useRef(null);
   const trailManagerRef = useRef(null);
   const wsRef = useRef(null);
+  const hasLoadedInitial = useRef(false);
+
+  // Instantly hide splash if cache is populated
+  useEffect(() => {
+    if (globalStore.tripState || globalStore.stops.length > 0) {
+      if (!hasLoadedInitial.current) {
+        hasLoadedInitial.current = true;
+        setSplashReady();
+      }
+    }
+  }, [setSplashReady]);
 
   // Initialize TrailManager
   useEffect(() => {
@@ -89,7 +103,7 @@ export default function RouteView() {
   }, []);
 
   // Animate bus smoothly between positions
-  
+
   // Initialize animator
   useEffect(() => {
     animatorRef.current = new GPSAnimator({
@@ -127,12 +141,12 @@ export default function RouteView() {
           if (msg.type === 'gps' && animatorRef.current) {
             animatorRef.current.pushPoint(msg.lat, msg.lon, msg.server_time);
             setBusPosition((prev) => ({ ...prev, lat: msg.lat, lon: msg.lon, speed_kmh: msg.speed_kmh, is_live: true }));
-            
+
             if (trailManagerRef.current) {
               trailManagerRef.current.addLivePoint(msg.lat, msg.lon);
             }
           }
-        } catch (e) {}
+        } catch (e) { }
       };
 
       ws.onclose = () => {
@@ -153,6 +167,11 @@ export default function RouteView() {
 
 
   const handleTouchStart = (e) => {
+    const timelineEl = e.target.closest('.ios-timeline');
+    if (timelineEl && timelineEl.scrollTop > 0) {
+      startYRef.current = null; // inner list is mid-scroll — don't hijack the gesture
+      return;
+    }
     if (scrollContainerRef.current && scrollContainerRef.current.scrollTop === 0) {
       startYRef.current = e.touches[0].clientY;
     } else {
@@ -194,8 +213,8 @@ export default function RouteView() {
       let trip = null;
       try {
         trip = await getTripState();
-      } catch (_) {}
-      
+      } catch (_) { }
+
       const [busRes, histRes, stopsRes] = await Promise.allSettled([
         getLatestGps(),
         getRouteHistory(trip?.trip_id || null),
@@ -207,24 +226,34 @@ export default function RouteView() {
       const fetchedStops = stopsRes.status === 'fulfilled' ? stopsRes.value : [];
 
       setTripState(trip);
-      if (bus && animatorRef.current && !busPosition) {
-        animatorRef.current.pushPoint(bus.lat, bus.lon, null);
+      globalStore.tripState = trip;
+
+      if (bus?.is_live) {
+        if (animatorRef.current && !animatorRef.current.currentPos) {
+          animatorRef.current.pushPoint(bus.lat, bus.lon, null);
+        }
+        setBusPosition(bus);
+      } else if (bus) {
         setBusPosition(bus);
       }
+      globalStore.busPosition = bus;
+
       setRouteHistory(history);
+      globalStore.history = history;
 
       // Only update stops when we get data — avoids blanking on network flap
       if (fetchedStops.length > 0) {
         setStops(fetchedStops);
+        globalStore.stops = fetchedStops;
       }
 
-      
+
 
       // Dynamic ETA Target (Morning = boarding stop, Evening = destination stop)
       if (bus?.is_live) {
         const isEvening = trip?.trip?.toLowerCase()?.includes('evening');
         const primaryTargetId = isEvening ? getUser()?.destination_stop_id : getUser()?.boarding_stop_id;
-        
+
         let finalEtaRes = null;
         let usedTargetId = primaryTargetId;
 
@@ -240,14 +269,14 @@ export default function RouteView() {
             const orderedStops = isEvening ? [...fetchedStops].reverse() : fetchedStops;
             const finalStop = orderedStops[orderedStops.length - 1];
             if (finalStop && finalStop.id !== primaryTargetId) {
-               try {
-                 finalEtaRes = await getEta(finalStop.id);
-                 usedTargetId = finalStop.id;
-               } catch (_) { }
+              try {
+                finalEtaRes = await getEta(finalStop.id);
+                usedTargetId = finalStop.id;
+              } catch (_) { }
             }
           }
         }
-        
+
         setEta(finalEtaRes);
         setEtaTargetStopId(usedTargetId);
       } else {
@@ -259,7 +288,10 @@ export default function RouteView() {
       if (plannedCoords.length === 0) {
         try {
           const geo = await getRouteGeometry();
-          if (geo?.coordinates?.length) setPlannedCoords(geo.coordinates);
+          if (geo?.coordinates?.length) {
+            setPlannedCoords(geo.coordinates);
+            globalStore.plannedCoords = geo.coordinates;
+          }
         } catch (_) { }
       }
 
@@ -278,6 +310,7 @@ export default function RouteView() {
     } catch (err) {
       setError('Unable to load data. Check your connection.');
     } finally {
+      saveStoreToCache();
       setLoading(false);
       setRefreshing(false);
       routeViewLoadedOnce = true;
@@ -286,7 +319,7 @@ export default function RouteView() {
         setSplashReady();
       }
     }
-  }, [plannedCoords.length, setSplashReady, busPosition]);
+  }, [plannedCoords.length, setSplashReady]);
 
   // Initial load + polling
   useEffect(() => {
@@ -294,7 +327,7 @@ export default function RouteView() {
     intervalRef.current = setInterval(() => fetchAll(false), POLL_MS);
     return () => {
       clearInterval(intervalRef.current);
-      
+
     };
   }, [fetchAll]);
 
@@ -416,7 +449,7 @@ export default function RouteView() {
     if (tripStatus === 'connecting') {
       return <span style={{ color: '#d97706', fontWeight: 700 }}>Connecting to Bus...</span>;
     }
-    
+
     if (tripName.includes('morning')) {
       const lateTag = lateMins > 2
         ? <div style={{ color: '#dc2626', fontWeight: 700, marginTop: '4px' }}>Delayed by {lateMins} mins</div>
@@ -460,35 +493,10 @@ export default function RouteView() {
   };
 
   const location = useLocation();
-  const showLoadingSpinner = location.state?.showLoadingSpinner === true;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  
-  if (loading && showLoadingSpinner) {
-    return (
-      <div className="app-shell" style={{ position: 'relative', height: '100%' }}>
-        <TopBar onHamburger={() => setDrawerOpen(true)} />
-        <div className="spinner-screen">
-          <div className="spinner" />
-          <span className="spinner-label">Loading tracker…</span>
-        </div>
-      </div>
-    );
-  }
 
-  if (loading && !tripState) {
-    return (
-      <>
-        <TopBar onHamburger={() => setDrawerOpen(true)} onNotification={() => setNotificationOpen(true)} />
-        <div className="route-view-ios">
-          <div className="route-view-ios__scroll" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <div className="spinner" style={{ width: 30, height: 30, borderTopColor: '#007AFF', borderWidth: 3 }} />
-          </div>
-        </div>
-      </>
-    );
-  }
 
 
 
@@ -503,7 +511,7 @@ export default function RouteView() {
 
       <div className="route-view-ios" style={{ position: 'relative', overflow: 'hidden' }}>
         {/* Pull to refresh indicator */}
-        <div 
+        <div
           style={{
             position: 'absolute',
             top: 0,
@@ -522,14 +530,14 @@ export default function RouteView() {
           <div className="spinner" style={{ width: 24, height: 24, borderTopColor: '#007AFF', borderWidth: 2 }} />
         </div>
 
-        <div 
+        <div
           className="route-view-ios__scroll"
           ref={scrollContainerRef}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          style={{ 
-            transform: `translateY(${isPulling ? 60 : pullY}px)`, 
+          style={{
+            transform: `translateY(${isPulling ? 60 : pullY}px)`,
             transition: isPulling || pullY === 0 ? 'transform 0.3s ease-out' : 'none',
             zIndex: 2,
             position: 'relative'
@@ -698,7 +706,7 @@ export default function RouteView() {
 
           {/* Live Map section header */}
           <div className="ios-section-header-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-            <div className="ios-section-title" style={{ margin: 0 }}>Live Map</div>
+            <div className="ios-section-title" style={{ margin: 0 }}>Map View</div>
             {!isIdleMode && busPosition?.server_time ? (
               <div className="ios-last-updated" style={{ margin: 0 }}>
                 Last updated: {formatLastUpdated(busPosition.server_time)}

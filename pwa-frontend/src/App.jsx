@@ -11,7 +11,8 @@ import {
   useLocation,
 } from 'react-router-dom';
 
-import { getToken } from './storage';
+import { getToken, clearToken } from './storage';
+import { clearApiToken } from './api';
 import { ToastContainer } from './components/Toast';
 import { refreshFcmToken, onForegroundMessage } from './firebase';
 
@@ -87,8 +88,13 @@ function NetworkGate({ children }) {
     };
   }, []);
 
-  if (!offline) return children;
-
+  // In development, we bypass the blocking UI even if the browser falsely reports offline
+  if (!offline || import.meta.env.DEV) {
+    if (offline) {
+      console.warn("Browser reported offline, but bypassing NetworkGate blocking UI for development.");
+    }
+    return children;
+  }
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
@@ -196,19 +202,22 @@ export const SplashContext = createContext({ setSplashReady: () => { }, isAppRea
 function SplashProvider({ children }) {
   const [showSplash, setShowSplash] = useState(true);
   const [isAppReady, setIsAppReady] = useState(false);
+  const mountTime = useRef(Date.now());
 
   const setSplashReady = () => {
     setIsAppReady(true);
+    const elapsed = Date.now() - mountTime.current;
+    const delay = Math.max(0, 1000 - elapsed);
     setTimeout(() => {
       setShowSplash(false);
-    }, 500); // minimum display time
+    }, delay);
   };
 
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
       setIsAppReady(true);
       setShowSplash(false);
-    }, 8000);
+    }, 1000);
     return () => clearTimeout(fallbackTimer);
   }, []);
 
@@ -293,6 +302,33 @@ function NotificationProvider({ children }) {
   );
 }
 
+// ── NEW: Global API error handler — reacts to events dispatched from api.js ──
+function ApiErrorHandler() {
+  const showToast = useToast();
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      clearApiToken();
+      clearToken();
+      showToast('Your session expired. Please log in again.', 'error');
+      window.location.replace('/');
+    };
+    const onServerError = () => showToast('Server error. Please try again shortly.', 'error');
+    const onOffline = () => showToast('Connection lost. Retrying…', 'warning');
+
+    window.addEventListener('api:unauthorized', onUnauthorized);
+    window.addEventListener('api:server-error', onServerError);
+    window.addEventListener('api:offline', onOffline);
+    return () => {
+      window.removeEventListener('api:unauthorized', onUnauthorized);
+      window.removeEventListener('api:server-error', onServerError);
+      window.removeEventListener('api:offline', onOffline);
+    };
+  }, [showToast]);
+
+  return null;
+}
+
 // ── App Shell wrapper ──────────────────────────────────────────────────────
 function AppShell() {
   const { showSplash } = useContext(SplashContext);
@@ -304,6 +340,7 @@ function AppShell() {
 
   return (
     <div className="app-shell">
+      <ApiErrorHandler />
       <Routes>
         {/* Public */}
         <Route path="/" element={<RedirectIfAuthed><ProfileSetup /></RedirectIfAuthed>} />

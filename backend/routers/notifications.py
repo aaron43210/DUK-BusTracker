@@ -41,7 +41,9 @@ async def get_my_notifications(
     # Actually, we can just append them, and if there are duplicates, the frontend will show them.
     # To be safe, let's just append them.
     
+    seen_signatures = set()
     for n in in_app_notifs:
+        seen_signatures.add((n.title, n.body))
         items.append({
             "id": n.id,
             "notification": {
@@ -66,11 +68,14 @@ async def get_my_notifications(
     for s in suggestions:
         # Check if we already have an InAppNotification for this exact response to avoid duplicates
         body_text = f"Admin ({s.status}): {s.admin_response[:100]}..." if len(s.admin_response) > 100 else f"Admin ({s.status}): {s.admin_response}"
-        if not any(item["notification"]["body"] == body_text for item in items):
+        title_text = "Response to your suggestion"
+        
+        if (title_text, body_text) not in seen_signatures:
+            seen_signatures.add((title_text, body_text))
             items.append({
                 "id": f"sugg_{s.id}",
                 "notification": {
-                    "title": "Response to your suggestion",
+                    "title": title_text,
                     "body": body_text
                 },
                 "type": "suggestion_response",
@@ -87,7 +92,8 @@ async def get_my_notifications(
     broadcasts = b_result.scalars().all()
     
     for b in broadcasts:
-        if not any(item["notification"]["title"] == b.title and item["notification"]["body"] == b.body for item in items):
+        if (b.title, b.body) not in seen_signatures:
+            seen_signatures.add((b.title, b.body))
             items.append({
                 "id": f"bc_{b.id}",
                 "notification": {

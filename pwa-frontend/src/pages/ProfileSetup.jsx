@@ -3,7 +3,7 @@
  * Screen 1: Name + email + boarding stop selection.
  * Shows OTP modal as a popup on the same screen after submit.
  */
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useRef, useContext, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
 import { register, getStops } from '../api';
@@ -33,17 +33,26 @@ export default function ProfileSetup() {
   const domainDropRef = useRef(null);
   const [domainDropOpen, setDomainDropOpen] = useState(false);
 
-  useEffect(() => {
+  const [stopsError, setStopsError] = useState(false);
+
+  const fetchStops = useCallback(() => {
+    setStopsError(false);
     getStops()
       .then(data => {
         if (Array.isArray(data) && data.length) {
           // Exclude the destination — users board at stops along the route
           const boarding = data.filter(s => !s.name.toLowerCase().includes('digital university'));
           setStops(boarding.length ? boarding : data);
+        } else {
+          setStopsError(true);
         }
       })
-      .catch(() => { }); // NetworkGate blocks offline users — this catch is a safety no-op
+      .catch(() => { setStopsError(true); });
   }, []);
+
+  useEffect(() => {
+    fetchStops();
+  }, [fetchStops]);
 
   // Close both dropdowns on outside click
   useEffect(() => {
@@ -171,10 +180,17 @@ export default function ProfileSetup() {
           <div className="setup-dropdown" ref={dropRef}>
             {/* Stops dropdown — NetworkGate guarantees we're online so stops will always load */}
             {stops.length === 0 ? (
-              <div className="setup-input" style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 14, height: 14, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-                Fetching stops…
-              </div>
+              stopsError ? (
+                <div className="setup-input" style={{ color: 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  Failed to load stops.
+                  <button type="button" onClick={fetchStops} style={{ color: 'var(--mint-dark)', fontWeight: 600 }}>Retry</button>
+                </div>
+              ) : (
+                <div className="setup-input" style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 14, height: 14, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                  Fetching stops…
+                </div>
+              )
             ) : (
               <>
                 <button

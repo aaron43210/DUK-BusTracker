@@ -297,10 +297,17 @@ async def handle_gps_update(
     # ── on_trip / late → proximity checks ────────────────────────────────────
     elif trip.status in ("on_trip", "late"):
         dest_lat, dest_lon = await get_destination_coords(db, trip.direction)
-        dist_to_dest = await get_osrm_distance_m(lat, lon, dest_lat, dest_lon)
-        logger.debug(
-            "[LIFECYCLE] Trip #%d %.0fm from destination", trip.id, dist_to_dest
+
+        # Fetch destination distance and stops in parallel
+        dist_to_dest_task = asyncio.create_task(
+            get_osrm_distance_m(lat, lon, dest_lat, dest_lon)
         )
+        stops_res_task = asyncio.create_task(
+            db.execute(select(BusStop).where(BusStop.route_id == trip.route_id))
+        )
+        dist_to_dest, stops_res = await asyncio.gather(dist_to_dest_task, stops_res_task)
+
+        logger.debug("[LIFECYCLE] Trip #%d %.0fm from destination", trip.id, dist_to_dest)
 
         # Early completion
         completion_radius = 100 if trip.direction == "forward" else 50
@@ -308,63 +315,72 @@ async def handle_gps_update(
             trip.status   = "completed"
             trip.ended_at = now_utc
             await db.commit()
-            logger.info(
-                "[LIFECYCLE] Trip #%d completed — within %dm of destination",
-                trip.id, completion_radius,
-            )
+            logger.info("[LIFECYCLE] Trip #%d completed", trip.id)
             return
 
         # Visited stops detection
         try:
-            stops_res = await db.execute(
-                select(BusStop).where(BusStop.route_id == trip.route_id)
-            )
             stops   = stops_res.scalars().all()
             visited = list(trip.visited_stops or [])
+            visited_set = set(visited)
 
-            unvisited  = [s for s in stops if s.id not in visited]
+            # Pre-filter with haversine < 2km before OSRM call
+            unvisited  = [s for s in stops if s.id not in visited_set]
             candidates = [
                 s for s in unvisited
                 if haversine_km(lat, lon, float(s.lat), float(s.lon)) < 2.0
             ]
-
             if candidates:
                 dests     = [(float(s.lat), float(s.lon)) for s in candidates]
                 distances = await get_osrm_distance_matrix_m(lat, lon, dests)
-                new_ids   = [
-                    s.id for s, d in zip(candidates, distances) if d <= 250
-                ]
-                if new_ids:
+                
+                # The stops we physically reached in this tick
+                reached_stops = [s for s, d in zip(candidates, distances) if d <= 250]
+                
+                if reached_stops:
+                    new_ids = [s.id for s in reached_stops]
+                    
+                    # --- AUTO CATCH-UP LOGIC ---
+                    is_fwd = (trip.direction == "forward")
+                    # Find the "furthest" reached stop in this tick based on order
+                    furthest_reached = max(
+                        reached_stops, 
+                        key=lambda x: x.order_index if is_fwd else -x.order_index
+                    )
+                    
+                    # Find all preceding stops that were skipped
+                    skipped_ids = []
+                    for s in stops:
+                        if s.id in visited_set or s.id in new_ids:
+                            continue
+                        
+                        # Forward: missed if order < furthest
+                        if is_fwd and s.order_index < furthest_reached.order_index:
+                            skipped_ids.append(s.id)
+                        # Reverse: missed if order > furthest
+                        elif not is_fwd and s.order_index > furthest_reached.order_index:
+                            skipped_ids.append(s.id)
+                            
+                    if skipped_ids:
+                        new_ids = skipped_ids + new_ids
+                        logger.info("[LIFECYCLE] Trip #%d auto-caught up %d skipped stops", trip.id, len(skipped_ids))
+                    
                     trip.visited_stops = visited + new_ids
-                    # FIX: explicitly flag the JSON column as modified so
-                    # SQLAlchemy's change-tracking detects the mutation
-                    # even when it holds a reference to the old list object.
                     flag_modified(trip, "visited_stops")
                     await db.commit()
-                    logger.info(
-                        "[LIFECYCLE] Trip #%d reached stops: %s", trip.id, new_ids
-                    )
+                    logger.info("[LIFECYCLE] Trip #%d reached stops: %s", trip.id, new_ids)
         except Exception as exc:
             logger.warning("[LIFECYCLE] Progression check failed: %s", exc)
 
-        # ETA late notification
+        # ETA + proximity alerts run concurrently
         try:
-            await check_eta_late_notification(
-                db, trip, lat, lon, dest_lat, dest_lon
+            await asyncio.gather(
+                check_eta_late_notification(db, trip, lat, lon, dest_lat, dest_lon),
+                run_proximity_alerts(db, trip, lat, lon),
+                return_exceptions=True,
             )
         except Exception as exc:
-            logger.warning("[LIFECYCLE] ETA check skipped: %s", exc)
-
-        # Proximity alerts
-        try:
-            alerts_sent = await run_proximity_alerts(db, trip, lat, lon)
-            if alerts_sent:
-                logger.info(
-                    "[LIFECYCLE] %d proximity alerts sent for trip #%d",
-                    alerts_sent, trip.id,
-                )
-        except Exception as exc:
-            logger.warning("[LIFECYCLE] Proximity alerts skipped: %s", exc)
+            logger.warning("[LIFECYCLE] Alert checks failed: %s", exc)
 
 
 async def auto_complete_expired_trips(db: AsyncSession) -> bool:

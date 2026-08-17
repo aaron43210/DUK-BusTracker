@@ -81,15 +81,12 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
             boarding_stop_id=req.boarding_stop_id,
         )
         db.add(user)
-        await db.commit()
-        await db.refresh(user)
     else:
         # Update name/boarding stop if provided
         if req.name.strip():
             user.name = req.name.strip()
         if req.boarding_stop_id:
             user.boarding_stop_id = req.boarding_stop_id
-        await db.commit()
 
     otp = generate_otp()
     user.otp_code = otp
