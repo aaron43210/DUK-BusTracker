@@ -61,8 +61,12 @@ async def live_gps_polling_loop(manager):
                         "server_time": log.server_time.isoformat() if log.server_time else None
                     })
                     
+                class DummyLog:
+                    pass
+                dummy_log = DummyLog()
+                
                 async with AsyncSessionLocal() as local_db:
-                    await handle_gps_update(local_db, manager, c_lat, c_lon, log.server_time, log)
+                    await handle_gps_update(local_db, manager, c_lat, c_lon, log.server_time, dummy_log)
                     await local_db.commit()
 
             await asyncio.gather(*(_process_log(log) for log in new_logs))

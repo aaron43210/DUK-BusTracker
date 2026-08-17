@@ -120,10 +120,16 @@ async def get_stops_ahead(
     if not ordered:
         return []
 
-    max_visited_order = max(
-        (s["order_index"] for s in ordered if s["id"] in visited_set),
-        default=-1,
-    )
+    if direction == "forward":
+        most_advanced_visited = max(
+            (s["order_index"] for s in ordered if s["id"] in visited_set),
+            default=-1,
+        )
+    else:
+        most_advanced_visited = min(
+            (s["order_index"] for s in ordered if s["id"] in visited_set),
+            default=9999,
+        )
 
     destinations  = [(s["lat"], s["lon"]) for s in ordered]
     distances_m   = await get_osrm_distance_matrix_m(bus_lat, bus_lon, destinations)
@@ -135,11 +141,18 @@ async def get_stops_ahead(
         if stop["id"] in visited_set:
             continue
 
-        if stop["order_index"] < max_visited_order:
+        is_behind = False
+        if direction == "forward":
+            is_behind = stop["order_index"] < most_advanced_visited
+        else:
+            is_behind = stop["order_index"] > most_advanced_visited
+
+        if is_behind:
             if dist_km >= 1.5:
                 result.append({**stop, "distance_km": round(dist_km, 3), "deviated": True})
-            continue
-
-        result.append({**stop, "distance_km": round(dist_km, 3), "deviated": False})
+            else:
+                continue
+        else:
+            result.append({**stop, "distance_km": round(dist_km, 3), "deviated": False})
 
     return result
