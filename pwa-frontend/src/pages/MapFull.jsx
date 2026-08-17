@@ -3,7 +3,7 @@
  * Full-screen live map view.
  * Mirrors MapFullScreen.tsx from the React Native app.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Crosshair, Plus, Minus } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
@@ -14,6 +14,8 @@ import {
   getLatestGps, getTripState, getRouteHistory, getEta, getRouteGeometry, getRouteSegment, getStops, getWsBusUrl
 } from '../api';
 import GPSAnimator from '../utils/gpsAnimator';
+import { SplashContext } from '../App';
+import { globalStore, saveStoreToCache } from '../store';
 import { getUser } from '../storage';
 import {
   getDelayBadge, haversineDistKm, getMapViewport,
@@ -36,12 +38,25 @@ export default function MapFull() {
   const wsRef = useRef(null);
   const cameraLocked = useRef(true); // auto-center on bus
   const initialCentered = useRef(false);
+  const hasLoadedInitial = useRef(false);
+
+  const { setSplashReady } = useContext(SplashContext);
+
+  // Instantly hide splash if cache is populated
+  useEffect(() => {
+    if (globalStore.tripState || globalStore.stops.length > 0) {
+      if (!hasLoadedInitial.current) {
+        hasLoadedInitial.current = true;
+        setSplashReady();
+      }
+    }
+  }, [setSplashReady]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [tripState, setTripState] = useState(null);
-  const [busPosition, setBusPosition] = useState(null);
-  const [stops, setStops] = useState([]);
-  const [plannedCoords, setPlannedCoords] = useState([]);
+  const [tripState, setTripState] = useState(globalStore.tripState);
+  const [busPosition, setBusPosition] = useState(globalStore.busPosition);
+  const [stops, setStops] = useState(globalStore.stops);
+  const [plannedCoords, setPlannedCoords] = useState(globalStore.plannedCoords);
   const [trailCoords, setTrailCoords] = useState([]);
   const [animatedBus, setAnimatedBus] = useState(null);
   const [selectedStop, setSelectedStop] = useState(null);
@@ -181,7 +196,7 @@ export default function MapFull() {
     }
   }, []);
 
-  
+
   // Initialize animator
   useEffect(() => {
     animatorRef.current = new GPSAnimator({
@@ -222,7 +237,7 @@ export default function MapFull() {
             animatorRef.current.pushPoint(msg.lat, msg.lon, msg.server_time);
             setBusPosition((prev) => ({ ...prev, lat: msg.lat, lon: msg.lon, speed_kmh: msg.speed_kmh, is_live: true }));
           }
-        } catch (e) {}
+        } catch (e) { }
       };
 
       ws.onclose = () => {
@@ -255,9 +270,14 @@ export default function MapFull() {
       const fetchedStops = stopsRes.status === 'fulfilled' ? stopsRes.value : [];
 
       setTripState(trip);
+      globalStore.tripState = trip;
       setBusPosition(bus);
+      globalStore.busPosition = bus;
 
-      if (fetchedStops.length > 0) setStops(fetchedStops);
+      if (fetchedStops.length > 0) {
+        setStops(fetchedStops);
+        globalStore.stops = fetchedStops;
+      }
 
       if (bus?.lat && bus?.lon) {
         if (bus?.is_live) {
@@ -289,7 +309,10 @@ export default function MapFull() {
       if (plannedCoords.length === 0) {
         try {
           const geo = await getRouteGeometry();
-          if (geo?.coordinates?.length) setPlannedCoords(geo.coordinates);
+          if (geo?.coordinates?.length) {
+            setPlannedCoords(geo.coordinates);
+            globalStore.plannedCoords = geo.coordinates;
+          }
         } catch (_) { }
       }
 
@@ -297,6 +320,7 @@ export default function MapFull() {
         ? history.coords.map(c => [c.lon, c.lat])
         : [];
       setTrailCoords(trail);
+      globalStore.history = history;
 
       updateSources(
         plannedCoords.length ? plannedCoords : [],
@@ -305,16 +329,21 @@ export default function MapFull() {
       );
 
     } finally {
+      saveStoreToCache();
       setLoading(false);
+      if (!hasLoadedInitial.current) {
+        hasLoadedInitial.current = true;
+        setSplashReady();
+      }
     }
-  }, [plannedCoords, updateBusMarker, updateSources, user?.boarding_stop_id]);
+  }, [plannedCoords.length, updateBusMarker, updateSources, user?.boarding_stop_id, setSplashReady]);
 
   useEffect(() => {
     fetchAll();
     intervalRef.current = setInterval(fetchAll, POLL_MS);
     return () => {
       clearInterval(intervalRef.current);
-      
+
     };
   }, [fetchAll]);
 
@@ -399,7 +428,7 @@ export default function MapFull() {
     <div className="map-full" style={{ position: 'absolute', inset: 0 }}>
       <TopBar
         showBack
-        onBack={() => navigate('/route', { state: { showLoadingSpinner: true } })}
+        onBack={() => navigate('/route')}
         title="Live Map"
         onHamburger={() => setDrawerOpen(true)}
       />
@@ -411,16 +440,7 @@ export default function MapFull() {
         style={{ position: 'absolute', top: '56px', left: 0, right: 0, bottom: 0 }}
       />
 
-      {loading && (
-        <div style={{
-          position: 'absolute', top: '56px', inset: 0,
-          background: 'rgba(244,245,247,0.85)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12,
-        }}>
-          <div className="spinner" />
-          <span className="spinner-label">Loading map…</span>
-        </div>
-      )}
+
 
       {/* Floating map controls (Unified vertical pill card matching native app) */}
       <div className="map-controls" style={{ bottom: selectedStop ? '240px' : '24px' }}>

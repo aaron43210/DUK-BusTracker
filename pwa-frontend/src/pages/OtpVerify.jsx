@@ -3,13 +3,13 @@
  * Screen 2: 6-digit OTP entry.
  * Calls POST /auth/verify, saves JWT, navigates to /route.
  */
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useContext } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { verify, register } from '../api';
 import { setApiToken } from '../api';
 import { saveToken, saveUser } from '../storage';
-import { useToast } from '../App';
+import { useToast, SplashContext } from '../App';
 import TopBar from '../components/TopBar';
 import { requestAndSaveFcmToken } from '../firebase';
 
@@ -21,6 +21,11 @@ export default function OtpVerify() {
   const showToast = useToast();
 
   const { email = '', name = '', boardingStop = null } = location.state || {};
+  
+  const { setSplashReady } = useContext(SplashContext);
+  useEffect(() => {
+    setSplashReady();
+  }, [setSplashReady]);
 
   const [otp,         setOtp]         = useState(Array(CODE_LENGTH).fill(''));
   const [error,       setError]       = useState('');

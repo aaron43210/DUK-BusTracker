@@ -543,29 +543,31 @@ async def get_route_history(
         return best if best_d <= threshold_km else None
 
     # Fetch completed trips in range
-    # Find unique dates that have GPS logs in the range
-    dates_res = await db.execute(
-        select(func.date(GpsLog.ist_time)).where(
-            func.date(GpsLog.ist_time).between(d_from, d_to),
-            GpsLog.lat.isnot(None)
-        ).distinct().order_by(func.date(GpsLog.ist_time).desc())
+    # 1. Fetch all GPS logs for the entire date range in ONE query
+    start_dt = datetime.combine(d_from, datetime.min.time())
+    end_dt   = datetime.combine(d_to + timedelta(days=1), datetime.min.time())
+
+    logs_res = await db.execute(
+        select(GpsLog).where(
+            GpsLog.lat.isnot(None),
+            GpsLog.ist_time >= start_dt,
+            GpsLog.ist_time <  end_dt,
+        ).order_by(GpsLog.id)
     )
-    valid_dates = dates_res.scalars().all()
+    all_logs = logs_res.scalars().all()
+
+    # 2. Group logs by date
+    from collections import defaultdict
+    logs_by_date = defaultdict(list)
+    for log in all_logs:
+        if log.ist_time:
+            logs_by_date[log.ist_time.date()].append(log)
+
+    valid_dates = sorted(list(logs_by_date.keys()), reverse=True)
 
     sessions = []
     for d in valid_dates:
-        # Use ist_time for date-boundary filtering — Supabase-computed, always correct IST
-        day_start = datetime.combine(d, datetime.min.time())
-        day_end   = day_start + timedelta(days=1)
-
-        logs_res = await db.execute(
-            select(GpsLog).where(
-                GpsLog.lat.isnot(None),
-                GpsLog.ist_time >= day_start,
-                GpsLog.ist_time <  day_end,
-            ).order_by(GpsLog.id)
-        )
-        logs = logs_res.scalars().all()
+        logs = logs_by_date[d]
 
         route_points   = []
         stop_crossings = []

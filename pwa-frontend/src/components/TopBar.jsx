@@ -6,7 +6,7 @@ import React from 'react';
 import { Menu, ArrowLeft, Bell } from 'lucide-react';
 import { useNotifications } from '../App';
 
-export default function TopBar({ onHamburger, onBack, onNotification, showBack = false }) {
+export default function TopBar({ onHamburger, onBack, onNotification, showBack = false, title = null }) {
   const { hasUnread } = useNotifications();
 
   return (
@@ -23,10 +23,16 @@ export default function TopBar({ onHamburger, onBack, onNotification, showBack =
         )}
       </div>
 
-      <div className="topbar__center">
-        <img src="/duk-logo.png" alt="DUK Bus Tracker" className="topbar__logo-img" />
-        <img src="/canlab.png" alt="CanLab" className="topbar__logo-img" />
-      </div>
+      {title ? (
+        <div className="topbar__center" style={{ gap: 0 }}>
+          <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--black)' }}>{title}</span>
+        </div>
+      ) : (
+        <div className="topbar__center">
+          <img src="/duk-logo.png" alt="DUK Bus Tracker" className="topbar__logo-img" />
+          <img src="/canlab.png" alt="CanLab" className="topbar__logo-img" />
+        </div>
+      )}
 
       <div className="topbar__right">
         {onNotification && (

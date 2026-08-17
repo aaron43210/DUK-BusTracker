@@ -105,5 +105,6 @@ async def broadcast_to_all_users(db, title: str, body: str, data: Optional[dict]
             User.verified.is_(True),
         )
     )
-    tokens = [row[0] for row in result.fetchall() if row[0]]
+    # Deduplicate tokens before sending (a user might have multiple rows — safety)
+    tokens = list({row[0] for row in result.all() if row[0]})
     return await send_push_notification(tokens, title, body, data, urgent=urgent)

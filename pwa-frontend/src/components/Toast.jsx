@@ -25,12 +25,6 @@ export function ToastItem({ toast, onRemove }) {
       onClick={handleRemove}
       role="alert"
     >
-      <span className="toast__icon">
-        {toast.type === 'success' && '✓'}
-        {toast.type === 'error' && '✕'}
-        {toast.type === 'info' && 'ℹ'}
-        {toast.type === 'warning' && '⚠'}
-      </span>
       <span className="toast__msg">{toast.msg}</span>
     </div>
   );

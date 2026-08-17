@@ -1,0 +1,1234 @@
+
+
+==================================================
+File: src/styles.css
+==================================================
+
+/* ════════════════════════════════════════════════════════════════════
+   DUK Dashboard — Light Mode Screenshot Layout
+   ════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg:        #F8FAFC;   
+  --surface:   #FFFFFF;   
+  --header-bg: #1EA7B4;
+  --header-text: #FFFFFF;
+  --border:    #E2E8F0;
+  
+  --primary:   #1D4ED8;
+  --teal:      #1EA7B4;
+  --slate:     #64748B;
+  --ink:       #0F172A;
+
+  --font: 'Poppins', -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.layout-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ════════════ header ════════════ */
+.site-header {
+  background: var(--header-bg);
+  color: var(--header-text);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 24px;
+  height: 60px;
+  flex: 0 0 auto;
+}
+
+.logo-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.logo-left svg {
+  width: 24px; height: 24px; color: white;
+}
+.logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.logo-bus {
+  font-size: 20px; font-weight: 800; font-style: italic; letter-spacing: 0.05em;
+}
+.logo-tracker {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+}
+.badge-beta {
+  background: rgba(0,0,0,0.2);
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  margin-left: 8px;
+}
+
+.logo-right {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px; font-weight: 700; opacity: 0.9;
+}
+
+/* ════════════ update bar ════════════ */
+.update-bar {
+  background: #EAEBF0;
+  color: var(--slate);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  padding: 6px 0;
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.update-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #94A3B8;
+}
+
+/* ════════════ tabs ════════════ */
+.tab-container {
+  padding: 16px 24px;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.tab-switcher {
+  display: flex;
+  background: #F8FAFC;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.tab-btn {
+  flex: 1;
+  padding: 12px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--slate);
+  cursor: pointer;
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  transition: all 0.2s;
+}
+.tab-btn.active {
+  background: var(--surface);
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  margin: -1px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+/* ════════════ main content ════════════ */
+.main-content {
+  flex: 1;
+  position: relative;
+  background: var(--bg);
+}
+
+/* Map View */
+.map-view-wrapper {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+}
+.location-card-wrapper {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 10;
+  width: 100%; max-width: 600px; padding: 0 16px;
+}
+.location-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.kicker {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--teal);
+  margin-bottom: 4px;
+}
+.loc-val {
+  font-size: 18px; font-weight: 700; color: var(--ink);
+}
+.map-canvas-container {
+  flex: 1;
+  position: relative;
+}
+.maplibregl-canvas { outline: none; }
+
+/* Route View */
+.route-view-wrapper {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 24px;
+}
+.next-trip-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.04);
+  border-radius: 12px;
+  width: 100%; max-width: 1200px;
+  padding: 60px 24px;
+  text-align: center;
+}
+.next-trip-kicker {
+  font-size: 14px; font-weight: 700; letter-spacing: 0.15em; color: var(--slate);
+  text-transform: uppercase; margin-bottom: 16px;
+}
+.next-trip-time {
+  font-size: 64px; font-weight: 800; color: var(--teal);
+  line-height: 1;
+}
+
+/* Footer */
+.powered-by {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: var(--slate);
+  z-index: 10;
+}
+.powered-by b { color: var(--teal); }
+
+/* Map markers */
+.bus-marker {
+  width: 32px; height: 32px;
+  background: #3B82F6; border: 2px solid white;
+  border-radius: 50%; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+  display: grid; place-items: center;
+}
+.bus-marker svg { width: 18px; height: 18px; color: white; }
+
+
+==================================================
+File: src/main.jsx
+==================================================
+
+import { createRoot } from 'react-dom/client';
+import App from './App';
+import './styles.css';
+
+createRoot(document.getElementById('root')).render(<App />);
+
+
+==================================================
+File: src/App.jsx
+==================================================
+
+import { useEffect, useState } from 'react';
+import MapView from './components/MapView';
+import { useTripState } from './hooks/useTripState';
+import { useBusPosition } from './hooks/useBusPosition';
+import { useStops } from './hooks/useStops';
+import { fmtClock } from './utils/format';
+
+export default function App() {
+  const { nextTripTime, isActive, isConnecting } = useTripState();
+  const { position } = useBusPosition(isActive || isConnecting);
+  const { stops, geometry } = useStops();
+  
+  const [tab, setTab] = useState('map');
+  const [clock, setClock] = useState(() => fmtClock(new Date()));
+
+  useEffect(() => {
+    const id = setInterval(() => setClock(fmtClock(new Date())), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Find nearest stop for current location
+  const currentLocationName = stops?.[position?.visited_stops ?? 0]?.name || 'Central Polytechnic';
+
+  return (
+    <div className="layout-root">
+      {/* ── Header ── */}
+      <header className="site-header">
+        <div className="logo-left">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+            <circle cx="12" cy="10" r="3"></circle>
+          </svg>
+          <div className="logo-text">
+            <span className="logo-bus">BUS</span>
+            <span className="logo-tracker">TRACKER</span>
+          </div>
+          <span className="badge-beta">BETA</span>
+        </div>
+        <div className="logo-right">
+          CAN LAB
+        </div>
+      </header>
+
+      {/* ── Status Bar ── */}
+      <div className="update-bar">
+        <span className="update-dot"></span>
+        LAST UPDATE : {new Date().toLocaleDateString('en-GB')}, {clock}
+      </div>
+
+      {/* ── Tabs ── */}
+      <div className="tab-container">
+        <div className="tab-switcher">
+          <button 
+            className={`tab-btn ${tab === 'route' ? 'active' : ''}`}
+            onClick={() => setTab('route')}
+          >
+            🚌 Route View
+          </button>
+          <button 
+            className={`tab-btn ${tab === 'map' ? 'active' : ''}`}
+            onClick={() => setTab('map')}
+          >
+            🗺️ Map View
+          </button>
+        </div>
+      </div>
+
+      {/* ── Main Content ── */}
+      <main className="main-content">
+        {tab === 'map' && (
+          <div className="map-view-wrapper">
+            <div className="location-card-wrapper">
+              <div className="location-card">
+                <div className="kicker">CURRENT LOCATION</div>
+                <div className="loc-val">{currentLocationName}</div>
+              </div>
+            </div>
+            <div className="map-canvas-container">
+              <MapView stops={stops || []} geometry={geometry} position={position} />
+            </div>
+            <div className="powered-by">POWERED BY <b>CAN LAB</b></div>
+          </div>
+        )}
+        
+        {tab === 'route' && (
+          <div className="route-view-wrapper">
+            <div className="next-trip-card">
+              <div className="next-trip-kicker">Next Scheduled Trip Is At</div>
+              <div className="next-trip-time">{nextTripTime || '07:30 AM'}</div>
+            </div>
+            <div className="powered-by">POWERED BY <b>CAN LAB</b></div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+
+==================================================
+File: src/utils/format.js
+==================================================
+
+/* utils/format.js — time & text formatting helpers. */
+
+export function fmtClock(date) {
+  return date.toLocaleTimeString('en-IN', {
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
+  });
+}
+
+export function fmtClockShort(date) {
+  return date.toLocaleTimeString('en-IN', {
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
+  }).replace(' ', '').toLowerCase();
+}
+
+/** "x sec/min ago" for the live-update footer. */
+export function agoFromIso(iso) {
+  if (!iso) return '—';
+  const diff = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 3) return 'just now';
+  if (diff < 60) return `${Math.round(diff)}s ago`;
+  return `${Math.round(diff / 60)}m ago`;
+}
+
+export const STATUS_LABEL = {
+  active: 'On Trip',
+  connecting: 'Connecting',
+  waiting: 'Scheduled',
+  weekend: 'Weekend',
+  offline: 'Not in Service',
+  completed: 'Trip Completed',
+  cancelled: 'Cancelled',
+};
+
+export function tripDestination(tripName) {
+  return tripName?.toLowerCase().includes('evening')
+    ? 'Central Polytechnic'
+    : 'Digital University Kerala';
+}
+
+export function tripOrigin(tripName) {
+  return tripName?.toLowerCase().includes('evening')
+    ? 'Digital University Kerala'
+    : 'Central Polytechnic';
+}
+
+export function isReverseDirection(tripName) {
+  return Boolean(tripName?.toLowerCase().includes('evening'));
+}
+
+
+==================================================
+File: src/utils/geo.js
+==================================================
+
+/* utils/geo.js — small geodesy helpers (no external deps). */
+
+export function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/** Cumulative km along an ordered list of {lat, lon}. Returns [cum, segLengths, total]. */
+export function cumulativeKm(points) {
+  const cum = [0];
+  const segs = [];
+  for (let i = 1; i < points.length; i++) {
+    const d = haversineKm(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon);
+    segs.push(d);
+    cum.push(cum[i - 1] + d);
+  }
+  return { cum, segs, total: cum[cum.length - 1] || 0 };
+}
+
+export function fmtKm(km) {
+  if (km == null) return '—';
+  return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+}
+
+
+==================================================
+File: src/components/MapView.jsx
+==================================================
+
+import { useEffect, useRef } from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
+const HOME = { center: [76.93, 8.56], zoom: 11.2, pitch: 46, bearing: 0 };
+
+function stopFeatures(stops, isReverse, visitedCount) {
+  const total = stops.length;
+  const ordered = isReverse ? [...stops].reverse() : stops;
+  return ordered.map((s) => {
+    const fwdIndex = isReverse ? total - 1 - s.order_index : s.order_index;
+    let state = 'upcoming';
+    if (fwdIndex < visitedCount) state = 'visited';
+    else if (fwdIndex === visitedCount) state = 'next';
+    const isTerminal = s.order_index === 0 || s.order_index === total - 1;
+    return {
+      type: 'Feature',
+      properties: {
+        name: s.name,
+        label: isTerminal
+          ? `${s.name}  ·  ${s.order_index === 0 ? 'ORIGIN' : 'DESTINATION'}`
+          : s.name,
+        state,
+        terminal: isTerminal,
+      },
+      geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+    };
+  });
+}
+
+function makeBusEl() {
+  const el = document.createElement('div');
+  el.className = 'bus-marker';
+  el.innerHTML = `
+    <div class="bus-ping"></div>
+    <div class="bus-orb">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 17a3 3 0 0 0 3 3v2h3v-2h2v2h3v-2a3 3 0 0 0 3-3V8a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v9z"/>
+        <path d="M5.5 11h13M5.5 14.5h13"/>
+      </svg>
+    </div>`;
+  return el;
+}
+
+function makePingEl() {
+  const el = document.createElement('div');
+  el.className = 'next-stop-ping';
+  el.innerHTML = '<div class="ring"></div><div class="core"></div>';
+  return el;
+}
+
+export default function MapView({
+  stops, geometry, position, trail, isActive, isReverse, visitedCount,
+  recentreTick, onUserPan,
+}) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const busMarkerRef = useRef(null);
+  const busElRef = useRef(null);
+  const pingMarkerRef = useRef(null);
+  const pingElRef = useRef(null);
+  const followRef = useRef(true);
+  const onUserPanRef = useRef(onUserPan);
+  onUserPanRef.current = onUserPan;
+
+  /* ── init map once ───────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return undefined;
+    let cancelled = false;
+    let map;
+
+    (async () => {
+      let style = STYLE_URL;
+      try {
+        const res = await fetch(STYLE_URL);
+        if (!res.ok) throw new Error(`style ${res.status}`);
+        style = await res.json();
+      } catch {
+        /* fallback to default */
+      }
+      if (cancelled) return;
+
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style,
+        center: HOME.center,
+        zoom: HOME.zoom,
+        pitch: HOME.pitch,
+        bearing: HOME.bearing,
+        antialias: true,
+        attributionControl: { compact: true },
+      });
+      mapRef.current = map;
+      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+
+      map.on('load', () => {
+        if (cancelled) return;
+        // route line (casing + fill)
+        map.addSource('route', {
+          type: 'geojson',
+          data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } },
+        });
+        map.addLayer({
+          id: 'route-casing', type: 'line', source: 'route',
+          paint: { 'line-color': '#FFFFFF', 'line-width': 9, 'line-opacity': 0.95 },
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+        });
+        map.addLayer({
+          id: 'route-line', type: 'line', source: 'route',
+          paint: { 'line-color': '#1D4ED8', 'line-width': 4 },
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+        });
+        // live trail
+        map.addSource('trail', {
+          type: 'geojson',
+          data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } },
+        });
+        map.addLayer({
+          id: 'trail-line', type: 'line', source: 'trail',
+          paint: { 'line-color': '#3B82F6', 'line-width': 4, 'line-opacity': 0.75 },
+          layout: { 'line-cap': 'round', 'line-join': 'round', 'line-dasharray': [2.2, 2.4] },
+        });
+        // stops
+        map.addSource('stops-src', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+        map.addLayer({
+          id: 'stops-ring', type: 'circle', source: 'stops-src',
+          paint: {
+            'circle-radius': ['match', ['get', 'state'],
+              'next', 7.5, 'visited', 6, 5.5],
+            'circle-color': ['match', ['get', 'state'],
+              'visited', '#1EA7B4', 'next', '#1D4ED8', '#FFFFFF'],
+            'circle-stroke-color': ['match', ['get', 'state'],
+              'visited', '#FFFFFF', 'next', '#FFFFFF', '#1D4ED8'],
+            'circle-stroke-width': ['match', ['get', 'terminal'], true, 3, 2.2],
+            'circle-stroke-opacity': 1,
+          },
+        });
+        map.addLayer({
+          id: 'stops-label', type: 'symbol', source: 'stops-src',
+          layout: {
+            'text-field': ['get', 'label'],
+            'text-anchor': 'top', 'text-offset': [0, 1.25],
+            'text-size': 11, 'text-optional': true, 'text-max-width': 8,
+            'text-font': ['Noto Sans Regular'],
+          },
+          paint: {
+            'text-color': ['match', ['get', 'state'], 'next', '#1D4ED8', '#0F172A'],
+            'text-halo-color': '#FFFFFF', 'text-halo-width': 2,
+          },
+        });
+      });
+
+      ['dragstart', 'wheel', 'touchstart'].forEach((evt) => {
+        map.on(evt, () => {
+          followRef.current = false;
+          onUserPanRef.current?.(true);
+        });
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+      busMarkerRef.current = null;
+      pingMarkerRef.current = null;
+    };
+  }, []);
+
+  /* ── route geometry ──────────────────────────────────────────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !geometry) return;
+    const line = geometry.features.find((f) => f.geometry?.type === 'LineString');
+    if (line && map.getSource('route')) map.getSource('route').setData(line);
+  }, [geometry]);
+
+  /* ── stops state (visited / next) ────────────────────────────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !stops?.length) return;
+    const src = map.getSource('stops-src');
+    if (!src) return;
+    src.setData({
+      type: 'FeatureCollection',
+      features: stopFeatures(stops, isReverse, visitedCount),
+    });
+  }, [stops, isReverse, visitedCount]);
+
+  /* ── fit bounds when layout changes (not on every poll) ─────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !stops?.length || !geometry) return;
+    const line = geometry.features.find((f) => f.geometry?.type === 'LineString');
+    if (!line) return;
+
+    const fit = () => {
+      if (!map.isStyleLoaded() || !line.geometry.coordinates.length) return;
+      const c = line.geometry.coordinates;
+      const bounds = c.reduce(
+        (b, coord) => b.extend(coord),
+        new maplibregl.LngLatBounds(c[0], c[0])
+      );
+      const wide = window.innerWidth > 760;
+      map.fitBounds(bounds, {
+        padding: isActive
+          ? (wide ? { top: 96, right: 416, bottom: 130, left: 56 } : { top: 96, bottom: 300, left: 56, right: 56 })
+          : { top: 96, bottom: 110, left: 56, right: 56 },
+        pitch: HOME.pitch,
+        duration: 900,
+        maxZoom: 13.4,
+      });
+    };
+    fit();
+    const t = setTimeout(fit, 500);
+    return () => clearTimeout(t);
+  }, [stops, geometry, isActive]);
+
+  /* ── trail ───────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !trail?.length) return;
+    const src = map.getSource('trail');
+    if (!src) return;
+    src.setData({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: trail },
+    });
+  }, [trail]);
+
+  /* ── live position → bus marker + follow + next-stop ping ───────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // hide markers when there is no fix yet
+    if (!position?.lat) {
+      if (busElRef.current) busElRef.current.style.display = 'none';
+      if (pingElRef.current) pingElRef.current.style.display = 'none';
+      return;
+    }
+
+    const lngLat = [position.lon, position.lat];
+
+    if (!busMarkerRef.current) {
+      busElRef.current = makeBusEl();
+      busMarkerRef.current = new maplibregl.Marker({ element: busElRef.current, anchor: 'center' })
+        .setLngLat(lngLat).addTo(map);
+    }
+    busElRef.current.style.display = '';
+    busMarkerRef.current.setLngLat(lngLat).setRotation(position.bearing || 0);
+
+    // pulsing "next stop" marker
+    const total = stops?.length || 0;
+    let nextStop = null;
+    if (total && visitedCount != null && visitedCount < total) {
+      const ordered = isReverse ? [...stops].reverse() : stops;
+      nextStop = ordered[visitedCount];
+    }
+    if (isActive && nextStop) {
+      if (!pingMarkerRef.current) {
+        pingElRef.current = makePingEl();
+        pingMarkerRef.current = new maplibregl.Marker({ element: pingElRef.current, anchor: 'center' })
+          .setLngLat([nextStop.lon, nextStop.lat]).addTo(map);
+      }
+      pingElRef.current.style.display = '';
+      pingMarkerRef.current.setLngLat([nextStop.lon, nextStop.lat]);
+    } else if (pingElRef.current) {
+      pingElRef.current.style.display = 'none';
+    }
+
+    if (followRef.current) {
+      map.easeTo({ center: lngLat, duration: 1400, easing: (t) => 1 - Math.pow(1 - t, 3) });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position?.lon, position?.lat, position?.bearing, isActive, visitedCount, isReverse, stops]);
+
+  /* ── recentre button ─────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!recentreTick) return;
+    const map = mapRef.current;
+    if (!map || !position?.lat) return;
+    followRef.current = true;
+    onUserPanRef.current?.(false);
+    map.easeTo({
+      center: [position.lon, position.lat],
+      zoom: Math.max(map.getZoom(), 13.2),
+      pitch: HOME.pitch,
+      duration: 1100,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentreTick]);
+
+  return <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />;
+}
+
+
+==================================================
+File: src/components/IdleChip.jsx
+==================================================
+
+/* Floating pill shown when no trip is active — the map stays full-screen. */
+export default function IdleChip({ status, nextTripTime }) {
+  const connecting = status === 'connecting';
+  const weekend = status === 'weekend';
+
+  let icon = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" />
+      <path d="M12 8v4l2.5 2.5" />
+    </svg>
+  );
+  let text;
+  let sub;
+
+  if (connecting) {
+    icon = (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 12a9 9 0 0 1 18 0M7 12a5 5 0 0 1 10 0M11 12a1 1 0 0 1 2 0" />
+      </svg>
+    );
+    text = 'Connecting to bus…';
+    sub = 'Trip is scheduled';
+  } else if (weekend) {
+    text = 'Weekend — no service';
+    sub = nextTripTime ? `Next trip ${nextTripTime}` : '';
+  } else if (status === 'cancelled') {
+    text = 'Trip cancelled';
+    sub = nextTripTime ? `Next trip ${nextTripTime}` : '';
+  } else {
+    text = 'Not in Service';
+    sub = nextTripTime ? `Next trip ${nextTripTime}` : 'Waiting for schedule';
+  }
+
+  return (
+    <div className={`idle-chip${connecting ? ' idle-chip--connecting' : ''}`}>
+      <div className="idle-icon">{icon}</div>
+      <div>
+        <div>{text}</div>
+        {sub && <div className="idle-sub">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+
+==================================================
+File: src/components/HeaderCard.jsx
+==================================================
+
+import StatusPill from './StatusPill';
+
+export default function HeaderCard({ status, lateByMinutes, isActive, isDemo, clock }) {
+  return (
+    <div className="header-card">
+      <div className="hc-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="1.9"
+             strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 17a3 3 0 0 0 3 3v2h3v-2h2v2h3v-2a3 3 0 0 0 3-3V8a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v9z" />
+          <path d="M5.5 11h13M5.5 14.5h13" />
+        </svg>
+      </div>
+      <div className="hc-text">
+        <div className="hc-title">DUK Bus Tracker</div>
+        <div className="hc-sub">
+          Live dashboard · Trivandrum
+          <span className="hc-clock">{clock} IST</span>
+        </div>
+      </div>
+      <div className="hc-right">
+        {isActive && lateByMinutes > 2 && (
+          <span className="chip-late">Delayed {lateByMinutes}m</span>
+        )}
+        {isDemo && <span className="chip-demo">Demo</span>}
+        <StatusPill status={status} />
+      </div>
+    </div>
+  );
+}
+
+
+==================================================
+File: src/components/RoutePanel.jsx
+==================================================
+
+import { useMemo } from 'react';
+import StatusPill from './StatusPill';
+import { cumulativeKm, fmtKm } from '../utils/geo';
+import { agoFromIso, tripDestination, isReverseDirection } from '../utils/format';
+
+const AVG_KMH = 30;
+
+function fmtHHMM(date) {
+  return date.toLocaleTimeString('en-IN', {
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
+
+/**
+ * RouteView — only mounted while the trip is ACTIVE.
+ * Slide-in panel: live ETA / speed / stops, progress bar, stop timeline.
+ */
+export default function RoutePanel({
+  tripName, status, lateByMinutes, position, eta, stops, onRecentre,
+}) {
+  const isReverse = isReverseDirection(tripName);
+  const stopsInDir = useMemo(
+    () => (isReverse ? [...stops].reverse() : stops),
+    [stops, isReverse]
+  );
+  const total = stopsInDir.length;
+  const visited = Math.min(position?.visited_stops ?? 1, total);
+  const destination = tripDestination(tripName);
+  const destShort = isReverse ? 'CP' : 'DUK';
+
+  // virtual schedule: anchor at the current bus position (demo) or trip start
+  const schedule = useMemo(() => {
+    if (!stopsInDir.length) return [];
+    const { cum } = cumulativeKm(stopsInDir);
+    const traveled = position?.traveled_km ?? 0;
+    let anchor;
+    if (position?.demo_mode) {
+      anchor = new Date(Date.now() - (traveled / AVG_KMH) * 3600e3);
+    } else {
+      anchor = new Date();
+      anchor.setHours(isReverse ? 17 : 7, 30, 0, 0);
+    }
+    return stopsInDir.map((_, i) =>
+      new Date(anchor.getTime() + (cum[i] / AVG_KMH) * 3600e3)
+    );
+  }, [stopsInDir, position?.traveled_km, position?.demo_mode, isReverse]);
+
+  return (
+    <aside className="route-panel">
+      <div className="rp-handle" />
+
+      {/* header */}
+      <div className="rp-head">
+        <div>
+          <div className="rp-kicker">Live Route View</div>
+          <div className="rp-title">Route View</div>
+          <div className="rp-trip">
+            <b>{tripName} Trip</b> → {destination}
+            {lateByMinutes > 2 && (
+              <span className="chip-late" style={{ marginLeft: 8 }}>
+                Delayed {lateByMinutes}m
+              </span>
+            )}
+          </div>
+        </div>
+        <StatusPill status={status} label="Live" />
+      </div>
+
+      {/* stats */}
+      <div className="rp-stats">
+        <div className="rp-stat">
+          <div className="rp-stat-value rp-stat-value--eta">
+            {eta?.minutes != null ? `${eta.minutes}m` : '—'}
+          </div>
+          <div className="rp-stat-label">ETA · TO {destShort}</div>
+        </div>
+        <div className="rp-stat-divider" />
+        <div className="rp-stat">
+          <div className="rp-stat-value">
+            {position?.speed_kmh != null ? position.speed_kmh.toFixed(1) : '—'}
+          </div>
+          <div className="rp-stat-label">SPEED KM/H</div>
+        </div>
+        <div className="rp-stat-divider" />
+        <div className="rp-stat">
+          <div className="rp-stat-value">{visited}/{total}</div>
+          <div className="rp-stat-label">STOPS</div>
+        </div>
+      </div>
+
+      {/* progress */}
+      <div className="rp-progress">
+        <div className="rp-progress-top">
+          <span>Trip progress</span>
+          <span>{position?.progress_pct != null ? `${position.progress_pct}%` : '—'}
+            {position?.remaining_km != null && ` · ${fmtKm(position.remaining_km)} left`}
+          </span>
+        </div>
+        <div className="rp-progress-bar">
+          <div
+            className="rp-progress-fill"
+            style={{ width: `${Math.min(100, position?.progress_pct ?? 0)}%` }}
+          />
+        </div>
+      </div>
+
+      {/* stop timeline */}
+      <div className="rp-timeline">
+        {!position && (
+          <div className="tl-row">
+            <div className="tl-body">
+              <div className="tl-name">Waiting for GPS fix…</div>
+              <div className="tl-status">The bus reports its position shortly after departure.</div>
+            </div>
+          </div>
+        )}
+        {stopsInDir.map((stop, i) => {
+          const isVisited = i < visited;
+          const isNext = i === visited;
+          const isTerminal = stop.order_index === 0 || stop.order_index === total - 1;
+          const isOrigin = (isReverse ? total - 1 : 0) === stop.order_index;
+
+          let sub = 'On time';
+          let subCls = '';
+          if (isVisited) {
+            sub = i === 0 ? 'Departed' : 'Arrived';
+            subCls = 'tl-status--next';
+          } else if (isNext) {
+            sub = 'Next Stop';
+            subCls = 'tl-status--next';
+          } else if (lateByMinutes > 2) {
+            sub = `Delayed +${lateByMinutes}m`;
+            subCls = 'tl-status--late';
+          }
+
+          return (
+            <div className="tl-row" key={stop.id}>
+              <div className="tl-time">
+                <div className="tl-sched">{schedule[i] ? fmtHHMM(schedule[i]) : '—'}</div>
+                {isVisited && <div className="tl-live">live</div>}
+              </div>
+              <div className="tl-track">
+                <div
+                  className={[
+                    'tl-dot',
+                    isVisited ? 'tl-dot--visited' : '',
+                    isNext ? 'tl-dot--next' : '',
+                    isTerminal ? 'tl-dot--terminal' : '',
+                  ].join(' ')}
+                />
+                {i < total - 1 && (
+                  <div className={`tl-line${isVisited ? ' tl-line--visited' : ''}`} />
+                )}
+              </div>
+              <div className="tl-body">
+                <div className={`tl-name${isNext ? ' tl-name--next' : ''}`}>
+                  {stop.name}
+                  {isOrigin && <span className="tl-badge">START</span>}
+                  {isTerminal && !isOrigin && <span className="tl-badge tl-badge--end">END</span>}
+                </div>
+                <div className={`tl-status ${subCls}`}>{sub}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* footer */}
+      <div className="rp-foot">
+        <span className="rp-live">
+          <span className="live-dot" />
+          Live · {agoFromIso(position?.updated_at)}
+        </span>
+        <button className="btn btn--ghost" onClick={onRecentre}>
+          Recentre
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+
+==================================================
+File: src/components/Legend.jsx
+==================================================
+
+/* Small map legend shown while a trip is active. */
+export default function Legend() {
+  return (
+    <div className="legend">
+      <div className="legend-row">
+        <span className="legend-line legend-line--route" />
+        Route
+      </div>
+      <div className="legend-row">
+        <span className="legend-line legend-line--trail" />
+        Live trail
+      </div>
+      <div className="legend-row">
+        <span className="legend-dot legend-dot--visited" />
+        Visited stop
+      </div>
+      <div className="legend-row">
+        <span className="legend-dot legend-dot--next" />
+        Next stop
+      </div>
+      <div className="legend-row">
+        <span className="legend-bus" />
+        Bus position
+      </div>
+    </div>
+  );
+}
+
+
+==================================================
+File: src/components/StatusPill.jsx
+==================================================
+
+import { STATUS_LABEL } from '../utils/format';
+
+export default function StatusPill({ status, label }) {
+  const cls = `pill pill--${status || 'offline'}`;
+  return (
+    <span className={cls}>
+      <span className="dot" />
+      {label || STATUS_LABEL[status] || 'Unknown'}
+    </span>
+  );
+}
+
+
+==================================================
+File: src/hooks/useTripState.js
+==================================================
+
+import { usePolling } from './usePolling';
+import { api } from '../api/client';
+
+/**
+ * Master switch of the whole dashboard.
+ * Polls GET /trip_state every 10s. RouteView opens only when status === 'active'.
+ */
+export function useTripState() {
+  const { data, error, online } = usePolling(api.tripState, 10000, true, []);
+  const trip = data || {};
+  return {
+    trip,
+    status: trip.status,               // active | connecting | waiting | offline | weekend | completed | cancelled
+    tripName: trip.trip,               // Morning | Evening | Unscheduled | Not in Service
+    lateByMinutes: trip.late_by_minutes ?? null,
+    nextTripTime: trip.next_trip_time ?? null,
+    cancellationReason: trip.cancellation_reason ?? null,
+    isDemo: trip.demo_mode === true,
+    isActive: trip.status === 'active',        // ← route view opens only in this state
+    isConnecting: trip.status === 'connecting',
+    error,
+    online,
+  };
+}
+
+
+==================================================
+File: src/hooks/useBusPosition.js
+==================================================
+
+import { usePolling } from './usePolling';
+import { api } from '../api/client';
+
+/**
+ * Live bus position. Polls GET /latest every 2s while the trip is active
+ * (or connecting), so the marker, trail and stats stay fresh.
+ */
+export function useBusPosition(enabled) {
+  const { data, error } = usePolling(api.latest, 2000, enabled, []);
+  return {
+    position: data,
+    error,
+    hasFix: Boolean(data && data.lat != null),
+  };
+}
+
+
+==================================================
+File: src/hooks/useStops.js
+==================================================
+
+import { usePolling } from './usePolling';
+import { api } from '../api/client';
+
+/** Ordered bus stops + route geometry, refreshed every 60s. */
+export function useStops() {
+  const stopsRes = usePolling(api.stops, 60000, true, []);
+  const geoRes = usePolling(api.routeGeometry, 60000, true, []);
+  return { stops: stopsRes.data || [], geometry: geoRes.data, error: stopsRes.error || geoRes.error };
+}
+
+/** ETA to the destination (or a specific stop), refreshed every 15s while active. */
+export function useEta(enabled, targetStopId = null) {
+  const { data } = usePolling(() => api.eta({ target_stop_id: targetStopId }), 15000, enabled, [targetStopId]);
+  return data;
+}
+
+
+==================================================
+File: src/hooks/usePolling.js
+==================================================
+
+import { useEffect, useRef, useState, useCallback } from 'react';
+
+/**
+ * usePolling — generic interval poller with online/offline awareness.
+ *   fn          async data fetcher
+ *   intervalMs  poll cadence (null disables)
+ *   enabled     master switch
+ *   deps        refetch when any dep changes (empty array = fetch once)
+ */
+export function usePolling(fn, intervalMs, enabled = true, deps = []) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [online, setOnline] = useState(navigator.onLine);
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+
+  const load = useCallback(async () => {
+    try {
+      const result = await fnRef.current();
+      setData(result);
+      setError(null);
+    } catch (err) {
+      if (err.name !== 'AbortError') setError(err);
+    }
+  }, []);
+
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || !online) return undefined;
+    let alive = true;
+
+    const tick = async () => {
+      try {
+        const result = await fnRef.current();
+        if (alive) { setData(result); setError(null); }
+      } catch (err) {
+        if (alive && err.name !== 'AbortError') setError(err);
+      }
+    };
+
+    tick();
+    const id = intervalMs ? setInterval(tick, intervalMs) : null;
+    return () => {
+      alive = false;
+      if (id) clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, online, intervalMs, ...deps]);
+
+  return { data, error, online, refresh: load };
+}
+
+
+==================================================
+File: src/api/client.js
+==================================================
+
+/* api/client.js — thin fetch layer over the FastAPI backend.
+   All calls are same-origin (Vite proxies them to :8000). */
+const DEFAULT_TIMEOUT_MS = 8000;
+
+async function request(path, options = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetch(path, {
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      ...options,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${res.statusText} — ${body.slice(0, 200)}`);
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export const api = {
+  tripState:     () => request('/api/v1/trip_state'),
+  stops:         () => request('/api/v1/stops'),
+  latest:        () => request('/api/v1/latest'),
+  routeGeometry: () => request('/api/v1/route_geometry'),
+  currentTrace:  () => request('/api/v1/current_trace'),
+  eta:           (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== null && v !== undefined)
+    ).toString();
+    return request(`/api/v1/eta${qs ? `?${qs}` : ''}`);
+  },
+  history:       (date) => request(`/api/v1/history/${date}`),
+  wsUrl:         () => {
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${window.location.host}/api/v1/ws/bus`;
+  },
+};

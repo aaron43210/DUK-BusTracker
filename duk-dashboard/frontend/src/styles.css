@@ -1,0 +1,212 @@
+/* ════════════════════════════════════════════════════════════════════
+   DUK Dashboard — Light Mode Screenshot Layout
+   ════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg:        #F8FAFC;   
+  --surface:   #FFFFFF;   
+  --header-bg: #1EA7B4;
+  --header-text: #FFFFFF;
+  --border:    #E2E8F0;
+  
+  --primary:   #1D4ED8;
+  --teal:      #1EA7B4;
+  --slate:     #64748B;
+  --ink:       #0F172A;
+
+  --font: 'Poppins', -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.layout-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ════════════ header ════════════ */
+.site-header {
+  background: var(--header-bg);
+  color: var(--header-text);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 24px;
+  height: 60px;
+  flex: 0 0 auto;
+}
+
+.logo-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.logo-left svg {
+  width: 24px; height: 24px; color: white;
+}
+.logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.logo-bus {
+  font-size: 20px; font-weight: 800; font-style: italic; letter-spacing: 0.05em;
+}
+.logo-tracker {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+}
+.badge-beta {
+  background: rgba(0,0,0,0.2);
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  margin-left: 8px;
+}
+
+.logo-right {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px; font-weight: 700; opacity: 0.9;
+}
+
+/* ════════════ update bar ════════════ */
+.update-bar {
+  background: #EAEBF0;
+  color: var(--slate);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  padding: 6px 0;
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.update-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #94A3B8;
+}
+
+/* ════════════ tabs ════════════ */
+.tab-container {
+  padding: 16px 24px;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.tab-switcher {
+  display: flex;
+  background: #F8FAFC;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.tab-btn {
+  flex: 1;
+  padding: 12px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--slate);
+  cursor: pointer;
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  transition: all 0.2s;
+}
+.tab-btn.active {
+  background: var(--surface);
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  margin: -1px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+/* ════════════ main content ════════════ */
+.main-content {
+  flex: 1;
+  position: relative;
+  background: var(--bg);
+}
+
+/* Map View */
+.map-view-wrapper {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+}
+.location-card-wrapper {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 10;
+  width: 100%; max-width: 600px; padding: 0 16px;
+}
+.location-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.kicker {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--teal);
+  margin-bottom: 4px;
+}
+.loc-val {
+  font-size: 18px; font-weight: 700; color: var(--ink);
+}
+.map-canvas-container {
+  flex: 1;
+  position: relative;
+}
+.maplibregl-canvas { outline: none; }
+
+/* Route View */
+.route-view-wrapper {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 24px;
+}
+.next-trip-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.04);
+  border-radius: 12px;
+  width: 100%; max-width: 1200px;
+  padding: 60px 24px;
+  text-align: center;
+}
+.next-trip-kicker {
+  font-size: 14px; font-weight: 700; letter-spacing: 0.15em; color: var(--slate);
+  text-transform: uppercase; margin-bottom: 16px;
+}
+.next-trip-time {
+  font-size: 64px; font-weight: 800; color: var(--teal);
+  line-height: 1;
+}
+
+/* Footer */
+.powered-by {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: var(--slate);
+  z-index: 10;
+}
+.powered-by b { color: var(--teal); }
+
+/* Map markers */
+.bus-marker {
+  width: 32px; height: 32px;
+  background: #3B82F6; border: 2px solid white;
+  border-radius: 50%; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+  display: grid; place-items: center;
+}
+.bus-marker svg { width: 18px; height: 18px; color: white; }

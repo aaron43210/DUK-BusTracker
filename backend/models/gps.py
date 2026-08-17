@@ -1,6 +1,6 @@
 """models/gps.py — GPS log model."""
 from sqlalchemy import (
-    Column, BigInteger, Float, String, DateTime
+    Column, BigInteger, Float, String, DateTime, Index
 )
 from sqlalchemy.sql import func
 from database import Base
@@ -16,3 +16,8 @@ class GpsLog(Base):
     lon         = Column(Float, nullable=True)
     speed       = Column(Float, nullable=True)
     event       = Column(String(30), nullable=True)
+
+    __table_args__ = (
+        Index("ix_gps_lat_id",   "lat", "id"),
+        Index("ix_gps_ist_lat",  "ist_time", "lat"),
+    )

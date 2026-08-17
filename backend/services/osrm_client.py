@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 OSRM_BASE_URL = os.environ.get("OSRM_URL", "http://127.0.0.1:5001")
 
+_osrm_client = httpx.AsyncClient(
+    base_url=OSRM_BASE_URL,
+    trust_env=False,
+    timeout=httpx.Timeout(connect=1.0, read=2.5, write=1.0, pool=1.0),
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+)
+
 # Trivandrum region bounding box — adjust to match your actual .osm.pbf extract
 REGION_BOUNDS = {
     "min_lat": 8.2,
@@ -116,26 +123,25 @@ async def snap_live_gps(lat: float, lon: float) -> tuple[float, float]:
 
     for radius in _SNAP_RADII_M:
         url = (
-            f"{OSRM_BASE_URL}/nearest/v1/driving/{lon:.6f},{lat:.6f}"
+            f"/nearest/v1/driving/{lon:.6f},{lat:.6f}"
             f"?number=1&radiuses={radius}{bearing_param}"
         )
         try:
-            async with httpx.AsyncClient(trust_env=False, timeout=1.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == "Ok" and data.get("waypoints"):
-                        pt = data["waypoints"][0]["location"]
-                        snapped_lat = float(pt[1])
-                        snapped_lon = float(pt[0])
-                        _snap_state.lat = snapped_lat
-                        _snap_state.lon = snapped_lon
-                        delta_m = haversine_m_math(lat, lon, snapped_lat, snapped_lon)
-                        logger.debug(
-                            "[OSRM] Snapped (%.5f,%.5f)→(%.5f,%.5f) Δ%.1fm r=%dm b=%s",
-                            lat, lon, snapped_lat, snapped_lon, delta_m, radius, bearing_param,
-                        )
-                        return snapped_lat, snapped_lon
+            resp = await _osrm_client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("waypoints"):
+                    pt = data["waypoints"][0]["location"]
+                    snapped_lat = float(pt[1])
+                    snapped_lon = float(pt[0])
+                    _snap_state.lat = snapped_lat
+                    _snap_state.lon = snapped_lon
+                    delta_m = haversine_m_math(lat, lon, snapped_lat, snapped_lon)
+                    logger.debug(
+                        "[OSRM] Snapped (%.5f,%.5f)→(%.5f,%.5f) Δ%.1fm r=%dm b=%s",
+                        lat, lon, snapped_lat, snapped_lon, delta_m, radius, bearing_param,
+                    )
+                    return snapped_lat, snapped_lon
         except Exception as e:
             logger.debug("[OSRM] snap_live_gps network error r=%dm: %s", radius, e)
             break
@@ -159,22 +165,21 @@ async def get_osrm_route(lat1: float, lon1: float, lat2: float, lon2: float) -> 
         return fallback_result
 
     url = (
-        f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
+        f"/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
         f"?radiuses={OSRM_LIVE_SNAP_RADIUS_M};{OSRM_LIVE_SNAP_RADIUS_M}"
         f"&continue_straight=false&overview=false"
     )
     try:
-        async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == "Ok" and data.get("routes"):
-                    route = data["routes"][0]
-                    return {
-                        "distance_m": float(route["distance"]),
-                        "duration_s": float(route["duration"]),
-                        "from_osrm":  True,
-                    }
+        resp = await _osrm_client.get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == "Ok" and data.get("routes"):
+                route = data["routes"][0]
+                return {
+                    "distance_m": float(route["distance"]),
+                    "duration_s": float(route["duration"]),
+                    "from_osrm":  True,
+                }
     except Exception as e:
         logger.debug("[OSRM] get_osrm_route fallback: %s", e)
 
@@ -247,24 +252,21 @@ async def get_osrm_distance_matrix_m(src_lat: float, src_lon: float, destination
     n             = len(valid_dests) + 1
     radiuses_str  = ";".join([str(OSRM_LIVE_SNAP_RADIUS_M)] * n)
     url = (
-        f"{OSRM_BASE_URL}/table/v1/driving/{coords_str}"
+        f"/table/v1/driving/{coords_str}"
         f"?sources=0&annotations=distance&radiuses={radiuses_str}"
     )
-
     try:
-        async with httpx.AsyncClient(trust_env=False, timeout=3.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == "Ok" and data.get("distances"):
-                    dists = data["distances"][0][1:]
-                    if len(dists) == len(valid_dests):
-                        for j, osrm_d in enumerate(dists):
-                            orig_idx = valid_indices[j]
-                            if osrm_d is not None:
-                                fallback_dists[orig_idx] = float(osrm_d)
+        resp = await _osrm_client.get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == "Ok" and data.get("distances"):
+                dists = data["distances"][0][1:]
+                if len(dists) == len(valid_dests):
+                    for j, osrm_d in enumerate(dists):
+                        if osrm_d is not None:
+                            fallback_dists[valid_indices[j]] = float(osrm_d)
     except Exception as e:
-        logger.debug("[OSRM] distance matrix fallback: %s", e)
+        logger.debug("[OSRM] get_osrm_distance_matrix_m fallback: %s", e)
 
     return fallback_dists
 
@@ -276,25 +278,21 @@ async def get_osrm_segment_geometry(lat1: float, lon1: float, lat2: float, lon2:
     straight_dist = haversine_m_math(lat1, lon1, lat2, lon2)
 
     url = (
-        f"{OSRM_BASE_URL}/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
+        f"/route/v1/driving/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
         f"?radiuses=15;15&snapping=any&continue_straight=true&overview=full&geometries=geojson"
     )
     try:
-        async with httpx.AsyncClient(trust_env=False, timeout=2.5) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == "Ok" and data.get("routes"):
-                    route = data["routes"][0]
-                    route_dist = float(route.get("distance", 0))
-                    # Prevent massive detours
-                    if straight_dist > 50 and route_dist > (straight_dist * 3.0):
-                        logger.warning(
-                            "[OSRM] Segment detour detected: route %.1fm > 3x straight %.1fm. Falling back to straight line.",
-                            route_dist, straight_dist
-                        )
-                        return [[lon1, lat1], [lon2, lat2]]
-                    return route["geometry"]["coordinates"]
+        resp = await _osrm_client.get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == "Ok" and data.get("routes"):
+                route = data["routes"][0]
+                route_dist = float(route.get("distance", 0))
+                if straight_dist > 50 and route_dist > straight_dist * 3.0:
+                    return [[lon1, lat1], [lon2, lat2]]
+                
+                geometry = route["geometry"]
+                return geometry["coordinates"]
     except Exception as e:
         logger.debug("[OSRM] get_osrm_segment_geometry error: %s", e)
     

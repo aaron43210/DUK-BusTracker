@@ -35,7 +35,7 @@ class ScheduledNotification(Base):
     title      = Column(String(200), nullable=False)
     body       = Column(Text, nullable=False)
     # When to fire this notification (UTC datetime)
-    send_at    = Column(DateTime, nullable=False)
+    send_at    = Column(DateTime, nullable=False, index=True)
     sent       = Column(Boolean, default=False)     # True after dispatch
     cancelled  = Column(Boolean, default=False)     # True when trip is restored
     created_at = Column(DateTime(timezone=True), server_default=func.now())

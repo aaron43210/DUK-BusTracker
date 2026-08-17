@@ -32,34 +32,31 @@ logger   = logging.getLogger(__name__)
 settings = get_settings()
 
 
+_MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_origin BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_destination BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_origin BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_destination BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE gps_realtime ADD COLUMN IF NOT EXISTS ist_time TIMESTAMP WITHOUT TIME ZONE",
+    """
+    UPDATE gps_realtime
+       SET ist_time = created_at AT TIME ZONE 'Asia/Kolkata'
+     WHERE ist_time IS NULL
+    """,
+]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create tables on startup and start background tasks."""
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Auto-migrate: OTP auth columns
-        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10);"))
-        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP WITH TIME ZONE;"))
-        # Auto-migrate: Route terminal role flags (admin-configurable origin/destination)
-        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_origin BOOLEAN DEFAULT FALSE;"))
-        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_destination BOOLEAN DEFAULT FALSE;"))
-        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_origin BOOLEAN DEFAULT FALSE;"))
-        await conn.execute(text("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_destination BOOLEAN DEFAULT FALSE;"))
-        # Auto-migrate: IST time column (Supabase DEFAULT handles new rows; back-fill old rows here)
-        await conn.execute(text("ALTER TABLE gps_realtime ADD COLUMN IF NOT EXISTS ist_time TIMESTAMP WITHOUT TIME ZONE;"))
-        
-        # Fix any incorrectly migrated historical data (the previous manual SQL shifted time backwards by 5.5 hours)
-        # FIX: Only back-fill rows where ist_time is genuinely NULL.
-        # Previously this ran a full-table UPDATE on every startup,
-        # which blocks for minutes on large tables.
-        await conn.execute(text("""
-            UPDATE gps_realtime
-               SET ist_time = created_at AT TIME ZONE 'Asia/Kolkata'
-             WHERE ist_time IS NULL;
-        """))
-
-    logger.info("[STARTUP] Database tables ensured.")
+        # Single transaction for all migrations
+        for sql in _MIGRATIONS:
+            await conn.execute(text(sql))
+    logger.info("[STARTUP] Database tables and migrations applied.")
 
     # Start the background notification scheduler (fires deferred push notifications)
     scheduler_task = asyncio.create_task(notification_scheduler_loop())
@@ -87,9 +84,19 @@ async def lifespan(app: FastAPI):
     logger.info("[SHUTDOWN] Engine disposed.")
 
 
+_ALLOWED_ORIGINS = frozenset([
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "https://legendary-gaufre-1dc00c.netlify.app",
+])
+
 app = FastAPI(
     title="DUK Bus Tracker API",
-    version="1.0.0",
+    version="2.0.0",
     description="Real-time bus tracking for Digital University Kerala",
     lifespan=lifespan,
     docs_url="/api/docs",
@@ -98,15 +105,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "https://legendary-gaufre-1dc00c.netlify.app",
-    ],
+    allow_origins=list(_ALLOWED_ORIGINS),
     allow_origin_regex=r"https://.*\.(vercel|netlify)\.app",
     allow_credentials=False,
     allow_methods=["*"],

@@ -36,18 +36,24 @@ export function clearApiToken() {
 
 async function apiFetch(path, opts = {}) {
   let res;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s safety timeout
+
   try {
     res = await fetch(BASE + path, {
       headers: {
         'Content-Type': 'application/json',
-        ...(  _token ? { Authorization: `Bearer ${_token}` } : {}),
+        ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
         ...(opts.headers || {}),
       },
+      signal: controller.signal,
       ...opts,
     });
   } catch (err) {
     window.dispatchEvent(new CustomEvent('api:offline'));
     throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   if (!res.ok) {

@@ -32,33 +32,43 @@ logger   = logging.getLogger(__name__)
 settings = get_settings()
 router   = APIRouter(prefix="/api/v1", tags=["gps"])
 
+# ── Pre-compiled regex (module-level, not per-request) ───────────────────────
+_QGPS_RE     = re.compile(r"\+QGPSLOC:\s*([^\r\n]+)")
+_POWER_WORDS = frozenset(["POWER_LOST", "POWER_RESTORE", "POWER_ON", "POWER_OFF"])
+_POWER_OFF   = frozenset(["POWER_LOST", "POWER_OFF"])
+
 
 # ── WebSocket connection manager (mobile app subscribers) ─────────────────────
 class ConnectionManager:
+    """Thread-safe WebSocket manager using a plain set for O(1) add/remove."""
+
     def __init__(self):
-        self.active: list[WebSocket] = []
+        self._active: set[WebSocket] = set()
 
-    async def connect(self, ws: WebSocket):
+    async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
-        self.active.append(ws)
-        logger.info("[WS] Client connected. Total: %d", len(self.active))
+        self._active.add(ws)
+        logger.info("[WS] Client connected. Total: %d", len(self._active))
 
-    def disconnect(self, ws: WebSocket):
-        if ws in self.active:
-            self.active.remove(ws)
-        logger.info("[WS] Client disconnected. Total: %d", len(self.active))
+    def disconnect(self, ws: WebSocket) -> None:
+        self._active.discard(ws)
+        logger.info("[WS] Client disconnected. Total: %d", len(self._active))
 
-    async def broadcast(self, data: dict):
-        dead = []
-        for ws in self.active:
-            try:
-                await ws.send_json(data)
-            except Exception:
+    async def broadcast(self, data: dict) -> None:
+        if not self._active:
+            return
+        # Fan-out concurrently — don't block on slow clients
+        dead: list[WebSocket] = []
+        results = await asyncio.gather(
+            *(ws.send_json(data) for ws in self._active),
+            return_exceptions=True,
+        )
+        active_list = list(self._active)
+        for ws, result in zip(active_list, results):
+            if isinstance(result, Exception):
                 dead.append(ws)
         for ws in dead:
-            if ws in self.active:
-                self.active.remove(ws)
-
+            self._active.discard(ws)
 
 manager = ConnectionManager()
 
@@ -73,8 +83,8 @@ async def process_raw_payload(raw: str, db: AsyncSession, server_now: datetime) 
     """
 
     # ── Power events ──────────────────────────────────────────────────────────
-    if any(x in raw for x in ["POWER_LOST", "POWER_RESTORE", "POWER_ON", "POWER_OFF"]):
-        is_off = any(x in raw for x in ["POWER_LOST", "POWER_OFF"])
+    if any(word in raw for word in _POWER_WORDS):
+        is_off = any(word in raw for word in _POWER_OFF)
         event  = "POWER_LOST" if is_off else "POWER_RESTORE"
 
         db.add(GpsLog(server_time=server_now, event=event))
@@ -89,7 +99,7 @@ async def process_raw_payload(raw: str, db: AsyncSession, server_now: datetime) 
         return {"type": "power", "event": event}
 
     # ── QGPSLOC parse ─────────────────────────────────────────────────────────
-    match = re.search(r"\+QGPSLOC:\s*([^\r\n]+)", raw)
+    match = _QGPS_RE.search(raw)
     if not match:
         raise ValueError("QGPSLOC not found in payload")
 

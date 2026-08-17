@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from constants import IST_OFFSET
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, update, and_
 
 from database import AsyncSessionLocal
 from models.notification import ScheduledNotification
@@ -45,17 +45,26 @@ async def _dispatch_due_notifications():
             if not due:
                 return
             logger.info("[SCHEDULER] Dispatching %d due notification(s)", len(due))
+            sent_ids: list[int] = []
+
             for notif in due:
                 try:
                     await broadcast_to_all_users(
                         db, notif.title, notif.body,
                         {"type": "scheduled_reminder", "trip_id": str(notif.trip_id)},
                     )
-                    notif.sent = True
+                    sent_ids.append(notif.id)
                     logger.info("[SCHEDULER] Sent notif id=%d trip_id=%d", notif.id, notif.trip_id)
                 except Exception as exc:
                     logger.error("[SCHEDULER] Failed notif id=%d: %s", notif.id, exc)
-            await db.commit()
+
+            if sent_ids:
+                await db.execute(
+                    update(ScheduledNotification)
+                    .where(ScheduledNotification.id.in_(sent_ids))
+                    .values(sent=True)
+                )
+                await db.commit()
         except Exception as exc:
             logger.error("[SCHEDULER] Dispatch error: %s", exc)
 

@@ -85,32 +85,31 @@ async def get_latest(db: AsyncSession = Depends(get_db)):
     """Latest GPS ping from the bus — filtered and road-snapped."""
     await auto_complete_expired_trips(db)
     
-    # Fetch last 5 pings so we can compute implied speed for outlier detection
     result = await db.execute(
-        select(GpsLog)
+        select(
+            GpsLog.lat, GpsLog.lon, GpsLog.speed, 
+            GpsLog.server_time, GpsLog.ist_time
+        )
         .where(GpsLog.lat.isnot(None))
         .order_by(desc(GpsLog.id))
-        .limit(5)
+        .limit(1)
     )
-    logs = result.scalars().all()
+    latest = result.first()
     
-    if not logs:
+    if not latest:
         raise HTTPException(status_code=404, detail="No GPS data yet")
 
-    latest = logs[0]
     now_utc = datetime.now(timezone.utc)
     log_time = latest.server_time
     if log_time.tzinfo is None:
         log_time = log_time.replace(tzinfo=timezone.utc)
     is_live = (now_utc - log_time).total_seconds() <= 60
 
-    lat, lon = latest.lat, latest.lon
-    
     return {
-        "lat":         lat,
-        "lon":         lon,
-        "raw_lat":     lat,            # Deprecated (raw not strictly needed here)
-        "raw_lon":     lon,
+        "lat":         latest.lat,
+        "lon":         latest.lon,
+        "raw_lat":     latest.lat,
+        "raw_lon":     latest.lon,
         "speed_kmh":   latest.speed,
         "server_time": latest.ist_time.isoformat() if latest.ist_time else log_time.isoformat(),
         "is_live":     is_live,
@@ -394,6 +393,15 @@ async def route_history(trip_id: int = None, db: AsyncSession = Depends(get_db))
     visited_stops: dict[str, bool] = {}
     arrival_times: dict[str, str]  = {}
 
+    # Pre-fill visited stops from the trip's auto-catchup array
+    if trip_id and trip and trip.visited_stops:
+        for stop_id in trip.visited_stops:
+            stop_match = next((s for s in stops_dicts if s["id"] == stop_id), None)
+            if stop_match:
+                visited_stops[stop_match["name"]] = True
+                # Optional: assign a fallback arrival time for auto-caught-up stops
+                # Or leave it blank so the UI just shows them as visited.
+
     for log in logs:
         log_ist = log.ist_time
         if log_ist is None:
@@ -402,7 +410,7 @@ async def route_history(trip_id: int = None, db: AsyncSession = Depends(get_db))
         nearest = find_nearest_stop_math(log.lat, log.lon, stops_dicts, threshold_km=0.3)
         if nearest:
             name = nearest["name"]
-            if name not in visited_stops:
+            if name not in arrival_times: # Only set arrival time for the first ping near the stop
                 visited_stops[name] = True
                 arrival_times[name] = log_ist.strftime("%I:%M %p")
 
@@ -489,12 +497,12 @@ async def get_eta(
     from services.trip_lifecycle import get_active_trip, to_ist
     # Get latest bus position
     result = await db.execute(
-        select(GpsLog)
+        select(GpsLog.id, GpsLog.lat, GpsLog.lon, GpsLog.speed)
         .where(GpsLog.lat.isnot(None))
         .order_by(desc(GpsLog.id))
         .limit(5)
     )
-    recent_logs = result.scalars().all()
+    recent_logs = result.all()
     if not recent_logs:
         raise HTTPException(status_code=404, detail="No bus data available")
 
