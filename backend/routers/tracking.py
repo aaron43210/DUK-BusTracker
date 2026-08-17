@@ -32,10 +32,10 @@ EVENING_DEPART_MINS = 17 * 60 + 40   # 05:40 PM — DUK departure
 def _auto_late_minutes(direction: str, time_mins: int) -> "int | None":
     """Compute how many minutes late the trip is vs its scheduled first-stop departure.
     Returns None if the trip is on-time or early."""
-    is_morning = direction.lower() in ("forward", "morning")
-    depart     = MORNING_DEPART_MINS if is_morning else EVENING_DEPART_MINS
-    delay      = time_mins - depart
-    return delay if delay > 2 else None  # only flag if >2 min late
+    # Since lateness is now locked in when the bus physically departs,
+    # if we are falling back to this function mid-trip, it is safer to assume 0 
+    # rather than continuously growing the delay based on the current clock time.
+    return 0
 
 
 # --- Global Memory Caches ---

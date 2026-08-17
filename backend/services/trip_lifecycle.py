@@ -161,6 +161,14 @@ async def _mark_on_trip(
 ) -> None:
     trip.status     = "on_trip"
     trip.started_at = now_utc
+    
+    now_ist = to_ist(now_utc)
+    time_mins = now_ist.hour * 60 + now_ist.minute
+    depart_mins = 450 if trip.direction in ("forward", "morning") else 1060
+    
+    delay = time_mins - depart_mins
+    trip.late_by_minutes = delay if delay > 2 else 0
+
     reset_snap_state()
     await db.commit()
     logger.info("[LIFECYCLE] Trip #%d → on_trip", trip.id)
