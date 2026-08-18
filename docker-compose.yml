@@ -12,7 +12,7 @@ services:
       - "8000:8000"
       - "8080:8080" # Traefik dashboard
     volumes:
-      - ./gateway:/etc/traefik
+      - ./duk_micro/gateway:/etc/traefik
     networks:
       - bus-net
 
@@ -40,13 +40,13 @@ services:
     image: osrm/osrm-backend
     command: "osrm-routed --algorithm mld /data/kerala-latest.osrm"
     volumes:
-      - ./osrm-data:/data
+      - ./duk_micro/osrm-data:/data
     networks:
       - bus-net
 
   gps-ingestion:
     build: 
-      context: .
+      context: ./duk_micro
       dockerfile: services/gps-ingestion/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -61,7 +61,7 @@ services:
 
   realtime-gateway:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/realtime-gateway/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -72,7 +72,7 @@ services:
 
   trip-lifecycle:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/trip-lifecycle/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -86,7 +86,7 @@ services:
 
   auth-service:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/auth-service/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -100,7 +100,7 @@ services:
 
   tracking-service:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/tracking-service/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -115,7 +115,7 @@ services:
 
   admin-service:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/admin-service/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -131,7 +131,7 @@ services:
 
   notification-api:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/notification-api/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -144,7 +144,7 @@ services:
 
   notification-worker:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/notification-service/Dockerfile
     command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info"]
     environment:
@@ -158,7 +158,7 @@ services:
 
   notification-consumer:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/notification-service/Dockerfile
     command: ["python", "event_consumer.py"]
     environment:
@@ -172,7 +172,7 @@ services:
 
   notification-scheduler:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/notification-service/Dockerfile
     command: ["python", "scheduled_dispatcher.py"]
     environment:
@@ -186,7 +186,7 @@ services:
 
   eta-ml-service:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/eta-ml-service/Dockerfile
     environment:
       - OSRM_URL=http://osrm-backend:5000
@@ -197,7 +197,7 @@ services:
 
   ml-training-job:
     build:
-      context: .
+      context: ./duk_micro
       dockerfile: services/ml-training-job/Dockerfile
     environment:
       - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
