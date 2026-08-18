@@ -35,6 +35,13 @@ settings = get_settings()
 _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_token VARCHAR(512)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_on BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS proximity_alert_enabled BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS boarding_alert_stop_id INTEGER",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS destination_alert_stop_id INTEGER",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_dest_alerted_trip_id INTEGER",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_alerted_trip_id INTEGER",
     "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_origin BOOLEAN DEFAULT FALSE",
     "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_morning_destination BOOLEAN DEFAULT FALSE",
     "ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS is_evening_origin BOOLEAN DEFAULT FALSE",
