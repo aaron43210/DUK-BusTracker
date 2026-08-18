@@ -121,4 +121,7 @@ ehthumbs.db
 *.ntvs*
 *.njsproj
 *.sln
-*Secrets*!pwa-frontend/.env.production
+
+# ── Legacy Folders (Ignored to prevent CI/CD confusion) ──
+frontend/
+duk-dashboard/
