@@ -121,4 +121,4 @@ ehthumbs.db
 *.ntvs*
 *.njsproj
 *.sln
-*Secrets*
+*Secrets*!pwa-frontend/.env.production
