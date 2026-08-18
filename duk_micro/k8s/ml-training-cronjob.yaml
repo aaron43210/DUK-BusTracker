@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: eta-ml-training
+  namespace: duk-bus
+spec:
+  schedule: "0 2 * * *" # Run at 2 AM daily
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: trainer
+            image: duk-bus/ml-trainer:latest
+            envFrom:
+            - secretRef:
+                name: app-secrets
+            volumeMounts:
+            - name: model-storage
+              mountPath: /app/models
+          restartPolicy: OnFailure
+          volumes:
+          - name: model-storage
+            persistentVolumeClaim:
+              claimName: eta-model-pvc

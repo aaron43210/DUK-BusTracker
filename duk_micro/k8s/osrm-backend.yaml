@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osrm-backend
+  namespace: bus-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: osrm-backend
+  template:
+    metadata:
+      labels:
+        app: osrm-backend
+    spec:
+      containers:
+      - name: osrm-backend
+        image: osrm/osrm-backend:latest
+        command: ["osrm-routed", "--algorithm", "mld", "/data/kerala-latest.osrm"]
+        ports:
+        - containerPort: 5000
+        volumeMounts:
+        - name: osrm-data
+          mountPath: /data
+      volumes:
+      - name: osrm-data
+        hostPath:
+          path: /opt/osrm-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: osrm-backend
+  namespace: bus-system
+spec:
+  selector:
+    app: osrm-backend
+  ports:
+  - port: 5000
+    targetPort: 5000

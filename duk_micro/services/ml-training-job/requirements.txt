@@ -1,0 +1,10 @@
+asyncio
+httpx
+joblib
+lightgbm
+numpy
+redis
+scikit-learn
+SQLAlchemy
+aiosqlite
+asyncpg

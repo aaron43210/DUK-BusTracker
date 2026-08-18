@@ -1,0 +1,11 @@
+# Placeholder for redis.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: duk-bus
+spec:
+  ports:
+  - port: 6379
+  selector:
+    app: redis

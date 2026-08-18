@@ -1,0 +1,19 @@
+# Placeholder for trip-lifecycle.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trip-lifecycle
+  namespace: duk-bus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trip-lifecycle
+  template:
+    metadata:
+      labels:
+        app: trip-lifecycle
+    spec:
+      containers:
+      - name: trip-lifecycle
+        image: duk-bus/trip-lifecycle:latest

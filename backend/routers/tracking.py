@@ -1,0 +1,848 @@
+"""
+routers/tracking.py — Public tracking endpoints (latest GPS, trip state, route history, ETA).
+"""
+import logging
+from datetime import datetime, timezone, date, timedelta
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+
+from database import get_db
+from models.gps import GpsLog
+from models.route import BusStop, Route
+from models.trip import Trip
+from services.geofence import haversine_km, find_nearest_stop_math, get_stops_ahead, cluster_gps_points
+from services.osrm_client import get_osrm_route_geometry, get_osrm_segment_geometry, snap_live_gps, haversine_m_math
+from services.eta_engine import predict_eta
+from services.trip_lifecycle import auto_complete_expired_trips
+from constants import (
+    IST_OFFSET, MORNING_START_MINS, MORNING_END_MINS, 
+    EVENING_START_MINS, EVENING_END_MINS, 
+    MORNING_WAIT_START, EVENING_WAIT_START
+)
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1", tags=["tracking"])
+
+# ── Scheduled first-stop departure times (mins since midnight, IST) ──────────
+MORNING_DEPART_MINS = 7 * 60 + 30    # 07:30 AM — DUK departure
+EVENING_DEPART_MINS = 17 * 60 + 40   # 05:40 PM — DUK departure
+
+
+def _auto_late_minutes(direction: str, time_mins: int) -> "int | None":
+    """Compute how many minutes late the trip is vs its scheduled first-stop departure.
+    Returns None if the trip is on-time or early."""
+    # Since lateness is now locked in when the bus physically departs,
+    # if we are falling back to this function mid-trip, it is safer to assume 0 
+    # rather than continuously growing the delay based on the current clock time.
+    return 0
+
+
+# --- Global Memory Caches ---
+_STOPS_CACHE = None
+_ROUTES_CACHE = None
+ETA_CACHE: dict[int, tuple[int, dict]] = {}  # stop_id -> (gps_log_id, eta_payload)
+
+def clear_stops_cache():
+    """Wipes the stops cache and routes cache, forcing a DB reload on the next request."""
+    global _STOPS_CACHE, _ROUTES_CACHE
+    _STOPS_CACHE = None
+    _ROUTES_CACHE = None
+    logger.info("[CACHE] Stops and routes cache cleared.")
+
+
+async def _get_all_stops(db: AsyncSession) -> list[dict]:
+    """Fetch all stops from DB ordered by route + order_index (with memory caching)."""
+    global _STOPS_CACHE
+    if _STOPS_CACHE is not None:
+        return _STOPS_CACHE
+
+    result = await db.execute(
+        select(BusStop).order_by(BusStop.route_id, BusStop.order_index)
+    )
+    stops = result.scalars().all()
+    _STOPS_CACHE = [
+        {
+            "id":           s.id,
+            "route_id":     s.route_id,
+            "name":         s.name,
+            "lat":          s.lat,
+            "lon":          s.lon,
+            "order_index":  s.order_index,
+            "morning_time": s.morning_time,  # scheduled morning arrival e.g. "07:35 AM"
+            "evening_time": s.evening_time,  # scheduled evening arrival e.g. "07:25 PM"
+        }
+        for s in stops
+    ]
+    return _STOPS_CACHE
+
+
+# ── Stateful filter for direct-to-supabase architectures ──
+from services.gps_filter import apply_gps_filter, get_filter_state, reset_filter_state
+
+@router.get("/latest")
+async def get_latest(db: AsyncSession = Depends(get_db)):
+    """Latest GPS ping from the bus — filtered and road-snapped."""
+    await auto_complete_expired_trips(db)
+    
+    result = await db.execute(
+        select(
+            GpsLog.lat, GpsLog.lon, GpsLog.speed, 
+            GpsLog.server_time, GpsLog.ist_time
+        )
+        .where(GpsLog.lat.isnot(None))
+        .order_by(desc(GpsLog.id))
+        .limit(1)
+    )
+    latest = result.first()
+    
+    if not latest:
+        raise HTTPException(status_code=404, detail="No GPS data yet")
+
+    now_utc = datetime.now(timezone.utc)
+    log_time = latest.server_time
+    if log_time.tzinfo is None:
+        log_time = log_time.replace(tzinfo=timezone.utc)
+    is_live = (now_utc - log_time).total_seconds() <= 60
+
+    return {
+        "lat":         latest.lat,
+        "lon":         latest.lon,
+        "raw_lat":     latest.lat,
+        "raw_lon":     latest.lon,
+        "speed_kmh":   latest.speed,
+        "server_time": latest.ist_time.isoformat() if latest.ist_time else log_time.isoformat(),
+        "is_live":     is_live,
+    }
+
+
+def format_trip_name(direction: str | None) -> str:
+    if not direction:
+        return "Not in Service"
+    d = direction.lower().strip()
+    if d in ("forward", "morning"):
+        return "Morning"
+    elif d in ("reverse", "evening"):
+        return "Evening"
+    elif d == "unscheduled":
+        return "Unscheduled"
+    return direction
+
+
+@router.get("/trip_state")
+async def trip_state(db: AsyncSession = Depends(get_db)):
+    """
+    Returns current trip status based on active Trip records.
+    Falls back to time-window logic if no Trip records exist.
+    """
+    await auto_complete_expired_trips(db)
+    
+    # Check GPS connectivity (ping within last 5 minutes to handle network drops)
+    gps_res = await db.execute(
+        select(GpsLog)
+        .where(GpsLog.lat.isnot(None))
+        .order_by(desc(GpsLog.id))
+        .limit(1)
+    )
+    latest_gps = gps_res.scalar_one_or_none()
+    
+    now_utc = datetime.now(timezone.utc)
+    log_time = None
+    is_gps_alive = False
+    gps_dead_minutes = 999
+    
+    if latest_gps and latest_gps.server_time:
+        log_time = latest_gps.server_time
+        if log_time.tzinfo is None:
+            log_time = log_time.replace(tzinfo=timezone.utc)
+        gps_dead_minutes = (now_utc - log_time).total_seconds() / 60.0
+        # FIX: Increased from 60s to 300s (5 minutes) to handle brief network drops
+        if gps_dead_minutes <= 5.0:
+            is_gps_alive = True
+
+    # FIX: Use IST date instead of server-local date to correctly find today's trips
+    now_ist = datetime.now(timezone.utc) + IST_OFFSET
+    today = now_ist.date()
+    time_mins = now_ist.hour * 60 + now_ist.minute
+
+    result = await db.execute(
+        select(Trip)
+        .where(Trip.date == today)
+        .order_by(desc(Trip.id))
+        .limit(5)
+    )
+    trips = result.scalars().all()
+
+    if trips:
+        is_deviated = False
+        if is_gps_alive and latest_gps and latest_gps.lat:
+            all_stops = await _get_all_stops(db)
+            nearest = find_nearest_stop_math(latest_gps.lat, latest_gps.lon, all_stops, threshold_km=10.0)
+            if nearest is None:
+                is_deviated = True
+
+        active = next((t for t in trips if t.status in ("on_trip", "active", "late")), None)
+        if active:
+            # FIX: If trip is on_trip in DB, consider it active unless GPS dead > 30 mins
+            if active.status in ("on_trip", "active", "late") and gps_dead_minutes <= 30.0:
+                is_gps_alive = True  # Override strict ping check for active trips
+                
+            target_status = active.status if active.status != "on_trip" else "active"
+            if not is_gps_alive:
+                target_status = "connecting"
+            
+            display_trip = "Unscheduled" if is_deviated else format_trip_name(active.direction)
+            if is_deviated and target_status != "connecting":
+                target_status = "active"
+                
+            auto_late = _auto_late_minutes(active.direction, time_mins)
+            late_val  = active.late_by_minutes if active.late_by_minutes is not None else auto_late
+
+            return {
+                "trip":           display_trip,
+                "status":         target_status,
+                "trip_id":        active.id,
+                "late_by_minutes": late_val,
+                "cancellation_reason": None,
+                "next_trip_time": None,
+                "is_deviated":    is_deviated,
+            }
+            
+        cancelled = next((t for t in trips if t.status == "cancelled"), None)
+        if cancelled:
+            return {
+                "trip":                "Unscheduled" if is_gps_alive else "Not in Service",
+                "status":              "cancelled",
+                "cancellation_reason": cancelled.cancellation_reason,
+                "next_trip_time":      None,
+            }
+
+        current_window = None
+        if MORNING_START_MINS <= time_mins <= MORNING_END_MINS:
+            current_window = "morning"
+        elif EVENING_START_MINS <= time_mins <= EVENING_END_MINS:
+            current_window = "evening"
+
+        if current_window:
+            completed_in_window = next((t for t in trips if t.status == "completed" and t.direction in (current_window, current_window.capitalize(), "forward" if current_window == "morning" else "reverse")), None)
+            if completed_in_window:
+                next_time = "05:40 PM" if current_window == "morning" else "07:30 AM"
+                return {
+                    "trip": "Unscheduled" if is_gps_alive else "Not in Service",
+                    "status": "completed",
+                    "trip_id": completed_in_window.id,
+                    "late_by_minutes": None,
+                    "cancellation_reason": None,
+                    "next_trip_time": next_time
+                }
+
+        scheduled_trips = [t for t in trips if t.status == "scheduled"]
+        if scheduled_trips:
+            # Check if any scheduled trip matches the current active window
+            active_target = None
+            for t in scheduled_trips:
+                is_m = t.direction in ("forward", "morning", "Morning")
+                if is_m and (MORNING_START_MINS <= time_mins <= MORNING_END_MINS):
+                    active_target = t
+                    break
+                elif not is_m and (EVENING_START_MINS <= time_mins <= EVENING_END_MINS):
+                    active_target = t
+                    break
+            
+            if active_target:
+                target_trip = active_target
+                is_morning = target_trip.direction in ("forward", "morning", "Morning")
+                is_active_window = True
+            else:
+                # If no active window, pick best upcoming trip
+                scheduled_trips.sort(key=lambda x: 0 if x.direction in ("forward", "morning", "Morning") else 1)
+                if time_mins > MORNING_END_MINS:
+                    evening_trips = [t for t in scheduled_trips if t.direction not in ("forward", "morning", "Morning")]
+                    target_trip = evening_trips[0] if evening_trips else scheduled_trips[0]
+                else:
+                    target_trip = scheduled_trips[0]
+                is_morning = target_trip.direction in ("forward", "morning", "Morning")
+                is_active_window = False
+                
+            if is_active_window:
+                display_trip = "Unscheduled" if is_deviated else format_trip_name(target_trip.direction)
+                status = "connecting"
+                if is_gps_alive:
+                    status = "active"
+                auto_late = _auto_late_minutes(target_trip.direction, time_mins)
+                return {
+                    "trip": display_trip,
+                    "status": status,
+                    "trip_id": target_trip.id,
+                    "late_by_minutes": auto_late,
+                    "cancellation_reason": None,
+                    "next_trip_time": None,
+                    "is_deviated": is_deviated,
+                }
+            else:
+                if is_gps_alive:
+                    return {
+                        "trip": "Unscheduled",
+                        "status": "active",
+                        "trip_id": target_trip.id,
+                        "late_by_minutes": None,
+                        "cancellation_reason": None,
+                        "next_trip_time": None,
+                    }
+
+                is_waiting_window = False
+                if is_morning and (MORNING_WAIT_START <= time_mins < MORNING_START_MINS):
+                    is_waiting_window = True
+                elif not is_morning and (EVENING_WAIT_START <= time_mins < EVENING_START_MINS):
+                    is_waiting_window = True
+                
+                return {
+                    "trip": "Not in Service",
+                    "status": "waiting" if is_waiting_window else "offline",
+                    "trip_id": target_trip.id,
+                    "late_by_minutes": None,
+                    "cancellation_reason": None,
+                    "next_trip_time": "07:30 AM" if is_morning else "05:40 PM",
+                }
+
+    # Fallback: time-window logic
+    if today.weekday() >= 5:
+        return {
+            "trip": "Unscheduled" if is_gps_alive else "Not in Service",
+            "status": "active" if is_gps_alive else "weekend",
+            "next_trip_time": "Mon 07:30 AM",
+        }
+
+    if today.weekday() == 4 and time_mins > EVENING_END_MINS:
+        return {
+            "trip": "Unscheduled" if is_gps_alive else "Not in Service",
+            "status": "active" if is_gps_alive else "completed",
+            "next_trip_time": "Mon 07:30 AM",
+        }
+
+    if MORNING_START_MINS <= time_mins <= MORNING_END_MINS or EVENING_START_MINS <= time_mins <= EVENING_END_MINS:
+        dir_name = "Morning" if time_mins <= MORNING_END_MINS else "Evening"
+        return {"trip": dir_name, "status": "active" if is_gps_alive else "connecting", "next_trip_time": None}
+    
+    if is_gps_alive:
+        return {"trip": "Unscheduled", "status": "active", "next_trip_time": None}
+
+    if MORNING_WAIT_START <= time_mins < MORNING_START_MINS:
+        return {"trip": "Not in Service", "status": "waiting", "next_trip_time": "07:30 AM"}
+    elif EVENING_WAIT_START <= time_mins < EVENING_START_MINS:
+        return {"trip": "Not in Service", "status": "waiting", "next_trip_time": "05:40 PM"}
+    else:
+        next_trip = "07:30 AM" if time_mins < MORNING_WAIT_START or time_mins > EVENING_END_MINS else "05:40 PM"
+        return {"trip": "Not in Service", "status": "offline", "next_trip_time": next_trip}
+
+
+@router.get("/route_history")
+async def route_history(trip_id: int = None, db: AsyncSession = Depends(get_db)):
+    """Visited stops and arrival times for today's current session or a specific trip."""
+    stops_dicts = await _get_all_stops(db)
+
+    if trip_id:
+        trip_res = await db.execute(select(Trip).where(Trip.id == trip_id))
+        trip = trip_res.scalar_one_or_none()
+        if trip and trip.started_at:
+            end_time = trip.ended_at or datetime.now(timezone.utc)
+            result = await db.execute(
+                select(GpsLog)
+                .where(
+                    GpsLog.lat.isnot(None),
+                    GpsLog.server_time >= trip.started_at,
+                    GpsLog.server_time <= end_time
+                )
+                .order_by(GpsLog.id)
+            )
+            logs = result.scalars().all()
+        else:
+            logs = []
+    else:
+        # Use ist_time (Supabase-computed) to determine current IST date and session type
+        from zoneinfo import ZoneInfo
+        now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+        is_evening = now_ist.hour > 17 or (now_ist.hour == 17 and now_ist.minute >= 30)
+        today_ist = now_ist.date()
+        # FIX: ist_time in PostgreSQL is TIMESTAMP WITHOUT TIME ZONE (offset-naive).
+        # We must generate an offset-naive datetime for the comparison.
+        start_of_today = datetime.combine(today_ist, datetime.min.time())
+
+        result = await db.execute(
+            select(GpsLog)
+            .where(
+                GpsLog.lat.isnot(None),
+                GpsLog.ist_time >= start_of_today,
+            )
+            .order_by(GpsLog.id)
+        )
+        logs = result.scalars().all()
+
+        # Filter logs manually for fallback
+        filtered_logs = []
+        for log in logs:
+            log_ist = log.ist_time
+            if log_ist is None:
+                continue
+            entry_hour = log_ist.hour
+            log_is_evening = entry_hour > 17 or (entry_hour == 17 and log_ist.minute >= 30)
+            if is_evening == log_is_evening:
+                filtered_logs.append(log)
+        logs = filtered_logs
+
+    visited_stops: dict[str, bool] = {}
+    arrival_times: dict[str, str]  = {}
+
+    # Pre-fill visited stops from the trip's auto-catchup array
+    if trip_id and trip and trip.visited_stops:
+        for stop_id in trip.visited_stops:
+            stop_match = next((s for s in stops_dicts if s["id"] == stop_id), None)
+            if stop_match:
+                visited_stops[stop_match["name"]] = True
+                # Optional: assign a fallback arrival time for auto-caught-up stops
+                # Or leave it blank so the UI just shows them as visited.
+
+    for log in logs:
+        log_ist = log.ist_time
+        if log_ist is None:
+            continue
+
+        nearest = find_nearest_stop_math(log.lat, log.lon, stops_dicts, threshold_km=0.3)
+        if nearest:
+            name = nearest["name"]
+            if name not in arrival_times: # Only set arrival time for the first ping near the stop
+                visited_stops[name] = True
+                arrival_times[name] = log_ist.strftime("%I:%M %p")
+
+    return {"visitedStops": visited_stops, "arrivalTimes": arrival_times}
+
+
+@router.get("/stops")
+async def get_stops(db: AsyncSession = Depends(get_db)):
+    """Return all bus stops (for mobile route rendering and admin panel)."""
+    return await _get_all_stops(db)
+
+
+@router.get("/routes")
+async def get_routes(db: AsyncSession = Depends(get_db)):
+    """Return all routes with their correctly filtered stops."""
+    global _ROUTES_CACHE
+    if _ROUTES_CACHE is not None:
+        return _ROUTES_CACHE
+
+    result = await db.execute(select(Route))
+    routes = result.scalars().all()
+
+    all_stops = await _get_all_stops(db)
+
+    output = []
+    for route in routes:
+        # FIX: filter stops by route_id
+        route_stops = [s for s in all_stops if s.get("route_id") == route.id]
+        output.append({"id": route.id, "name": route.name, "stops": route_stops})
+        
+    _ROUTES_CACHE = output
+    return _ROUTES_CACHE
+
+
+@router.get("/route_geometry")
+async def get_route_geometry(db: AsyncSession = Depends(get_db)):
+    """Return turn-by-turn road polyline coordinates calculated by OSRM for the standard route."""
+    stops = await _get_all_stops(db)
+    if not stops:
+        return {"coordinates": []}
+    waypoints = [(s["lat"], s["lon"]) for s in stops]
+    coords = await get_osrm_route_geometry(waypoints)
+    return {"coordinates": coords}
+
+
+@router.get("/route_segment")
+async def get_route_segment(
+    lat1: float = Query(..., description="Start latitude"),
+    lon1: float = Query(..., description="Start longitude"),
+    lat2: float = Query(..., description="End latitude"),
+    lon2: float = Query(..., description="End longitude"),
+):
+    """Return road-following coordinates between two points from OSRM."""
+    coords = await get_osrm_segment_geometry(lat1, lon1, lat2, lon2)
+    return {"coordinates": coords}
+
+
+@router.post("/snap_route")
+async def snap_route(payload: dict):
+    """Snap an arbitrary list of [[lon, lat], ...] or [{lat, lon}, ...] points to roads using OSRM."""
+    raw_pts = payload.get("points", [])
+    if not raw_pts:
+        return {"coordinates": []}
+
+    waypoints = []
+    for p in raw_pts:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            waypoints.append((float(p[1]), float(p[0])) if abs(float(p[0])) > 40 else (float(p[0]), float(p[1])))
+        elif isinstance(p, dict) and "lat" in p and "lon" in p:
+            waypoints.append((float(p["lat"]), float(p["lon"])))
+
+    coords = await get_osrm_route_geometry(waypoints)
+    return {"coordinates": coords}
+
+
+
+
+@router.get("/eta")
+async def get_eta(
+    stop_id: int = Query(..., description="Target bus stop ID"),
+    db:      AsyncSession = Depends(get_db),
+):
+    """LightGBM ETA prediction to the target stop from current bus position."""
+    from services.trip_lifecycle import get_active_trip, to_ist
+    # Get latest bus position
+    result = await db.execute(
+        select(GpsLog.id, GpsLog.lat, GpsLog.lon, GpsLog.speed)
+        .where(GpsLog.lat.isnot(None))
+        .order_by(desc(GpsLog.id))
+        .limit(5)
+    )
+    recent_logs = result.all()
+    if not recent_logs:
+        raise HTTPException(status_code=404, detail="No bus data available")
+
+    latest = recent_logs[0]
+
+    # ── Check GPS-Synced ETA Cache ──
+    if stop_id in ETA_CACHE:
+        cached_log_id, cached_response = ETA_CACHE[stop_id]
+        if cached_log_id == latest.id:
+            return cached_response
+
+    # Get target stop
+    stop_result = await db.execute(select(BusStop).where(BusStop.id == stop_id))
+    stop        = stop_result.scalar_one_or_none()
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+
+    # Speed average over last 3 pings
+    speeds = [log.speed for log in recent_logs if log.speed is not None]
+    speed_avg = sum(speeds) / len(speeds) if speeds else 20.0
+
+    now = datetime.now(timezone.utc)
+    active_trip = await get_active_trip(db, to_ist(now))
+    direction = active_trip.direction if active_trip else ("reverse" if to_ist(now).hour >= 17 else "forward")
+    visited = active_trip.visited_stops if active_trip else []
+
+    # Stops remaining (approximate)
+    all_stops = await _get_all_stops(db)
+    ahead     = await get_stops_ahead(latest.lat, latest.lon, all_stops, direction, visited)
+    
+    # Check if this stop was hard-skipped or soft-skipped (deviated)
+    target_in_ahead = next((s for s in ahead if s["id"] == stop_id), None)
+    
+    if not target_in_ahead and stop_id in visited:
+        # It was literally visited
+        response = {
+            "stop_id":   stop_id,
+            "stop_name": stop.name,
+            "status":    "passed",
+        }
+        ETA_CACHE[stop_id] = (latest.id, response)
+        return response
+        
+    if target_in_ahead and target_in_ahead.get("deviated"):
+        response = {
+            "stop_id":   stop_id,
+            "stop_name": stop.name,
+            "status":    "deviated",
+        }
+        ETA_CACHE[stop_id] = (latest.id, response)
+        return response
+
+    stops_remaining = len([s for s in ahead if s["order_index"] <= stop.order_index])
+
+    # Snap bus position ONCE and use consistently throughout this request
+    snapped_bus_lat, snapped_bus_lon = await snap_live_gps(latest.lat, latest.lon)
+
+    # Compute elapsed minutes from trip start (was hardcoded to 0 before)
+    elapsed_minutes = 0.0
+    if active_trip and active_trip.started_at:
+        trip_started = active_trip.started_at
+        if trip_started.tzinfo is None:
+            trip_started = trip_started.replace(tzinfo=timezone.utc)
+        elapsed_minutes = max(0.0, (now - trip_started).total_seconds() / 60.0)
+
+    prediction = await predict_eta(
+        bus_lat=snapped_bus_lat,
+        bus_lon=snapped_bus_lon,
+        target_stop_lat=stop.lat,
+        target_stop_lon=stop.lon,
+        stops_remaining=stops_remaining,
+        hour_of_day=now.hour,
+        day_of_week=now.weekday(),
+        trip_direction=1 if now.hour >= 17 else 0,
+        elapsed_minutes=elapsed_minutes,
+        speed_last_3=speed_avg,
+    )
+
+    response = {
+        "stop_id":     stop_id,
+        "stop_name":   stop.name,
+        "bus_lat":     snapped_bus_lat,
+        "bus_lon":     snapped_bus_lon,
+        **prediction,
+    }
+    
+    # Save to cache
+    ETA_CACHE[stop_id] = (latest.id, response)
+    
+    return response
+
+
+@router.get("/eta/all")
+async def get_all_etas(db: AsyncSession = Depends(get_db)):
+    """Batch LightGBM ETA prediction for all upcoming stops."""
+    from services.trip_lifecycle import get_active_trip, to_ist
+    
+    result = await db.execute(
+        select(GpsLog.id, GpsLog.lat, GpsLog.lon, GpsLog.speed)
+        .where(GpsLog.lat.isnot(None))
+        .order_by(desc(GpsLog.id))
+        .limit(5)
+    )
+    recent_logs = result.all()
+    if not recent_logs:
+        return {}
+
+    latest = recent_logs[0]
+    speeds = [log.speed for log in recent_logs if log.speed is not None]
+    speed_avg = sum(speeds) / len(speeds) if speeds else 20.0
+
+    now = datetime.now(timezone.utc)
+    active_trip = await get_active_trip(db, to_ist(now))
+    direction = active_trip.direction if active_trip else ("reverse" if to_ist(now).hour >= 17 else "forward")
+    visited = active_trip.visited_stops if active_trip else []
+
+    all_stops = await _get_all_stops(db)
+    ahead = await get_stops_ahead(latest.lat, latest.lon, all_stops, direction, visited)
+
+    snapped_bus_lat, snapped_bus_lon = await snap_live_gps(latest.lat, latest.lon)
+
+    elapsed_minutes = 0.0
+    if active_trip and active_trip.started_at:
+        trip_started = active_trip.started_at
+        if trip_started.tzinfo is None:
+            trip_started = trip_started.replace(tzinfo=timezone.utc)
+        elapsed_minutes = max(0.0, (now - trip_started).total_seconds() / 60.0)
+
+    import asyncio
+    etas = {}
+    tasks = []
+    
+    for stop in ahead:
+        stops_remaining = len([s for s in ahead if s["order_index"] <= stop["order_index"]])
+        tasks.append(predict_eta(
+            bus_lat=snapped_bus_lat,
+            bus_lon=snapped_bus_lon,
+            target_stop_lat=stop["lat"],
+            target_stop_lon=stop["lon"],
+            stops_remaining=stops_remaining,
+            hour_of_day=now.hour,
+            day_of_week=now.weekday(),
+            trip_direction=1 if now.hour >= 17 else 0,
+            elapsed_minutes=elapsed_minutes,
+            speed_last_3=speed_avg,
+        ))
+        
+    predictions = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    for idx, stop in enumerate(ahead):
+        pred = predictions[idx]
+        if not isinstance(pred, Exception):
+            etas[stop["id"]] = pred["eta_minutes"]
+
+    return etas
+
+
+@router.get("/history/{date_str}")
+async def history_by_date(date_str: str, db: AsyncSession = Depends(get_db)):
+    """GPS route history for a specific date (YYYY-MM-DD)."""
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+    # Filter by ist_time — Supabase-computed IST column, so dates are always correct
+    from zoneinfo import ZoneInfo
+    start = datetime.combine(target_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata"))
+    end   = datetime.combine(target_date + timedelta(days=1), datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata"))
+
+    result = await db.execute(
+        select(GpsLog)
+        .where(GpsLog.lat.isnot(None), GpsLog.ist_time >= start, GpsLog.ist_time < end)
+        .order_by(GpsLog.id)
+    )
+    logs = result.scalars().all()
+
+    route_points = []
+    last_lat, last_lon = None, None
+    for log in logs:
+        # ist_time is directly stored as IST by Supabase — no conversion needed
+        log_ist = log.ist_time
+        if log_ist is None:
+            continue
+        hour = log_ist.hour
+
+        # Filter out trips outside 6 AM to 9 PM IST
+        if hour < 6 or hour >= 21:
+            continue
+
+        if last_lat is not None:
+            dist = haversine_km(last_lat, last_lon, log.lat, log.lon)
+            if dist < 0.01:  # < 10 m movement — skip (stationary drift)
+                continue
+            if dist > 10.0:  # > 10 km jump (massive GPS glitch) — just skip the glitched point
+                continue
+
+        route_points.append({
+            "lat":  log.lat,
+            "lon":  log.lon,
+            "time": log_ist.isoformat(),
+        })
+        last_lat, last_lon = log.lat, log.lon
+
+    return route_points
+
+@router.get("/current_trace")
+async def get_current_trace(db: AsyncSession = Depends(get_db)):
+    """Return the OSRM-snapped trace for the current session when there is no active Trip ID."""
+    from zoneinfo import ZoneInfo
+    now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+    is_evening = now_ist.hour > 17 or (now_ist.hour == 17 and now_ist.minute >= 30)
+    today_ist = now_ist.date()
+    start_of_today = datetime.combine(today_ist, datetime.min.time())
+
+    result = await db.execute(
+        select(GpsLog)
+        .where(GpsLog.lat.isnot(None), GpsLog.ist_time >= start_of_today)
+        .order_by(GpsLog.id)
+    )
+    logs = result.scalars().all()
+
+    # Filter for the current shift
+    filtered_logs = []
+    for log in logs:
+        if log.ist_time is None: continue
+        entry_hour = log.ist_time.hour
+        log_is_evening = entry_hour > 17 or (entry_hour == 17 and log.ist_time.minute >= 30)
+        if is_evening == log_is_evening:
+            filtered_logs.append(log)
+
+    if not filtered_logs:
+        return {"coordinates": []}
+
+    raw_tuples = [(log.lat, log.lon) for log in filtered_logs]
+    filtered_waypoints = cluster_gps_points(raw_tuples, radius_km=0.030)
+
+    if len(filtered_waypoints) < 2:
+        return {
+            "coordinates": [[w[1], w[0]] for w in filtered_waypoints],
+            "trip_status": "active",
+            "started_at": start_of_today.isoformat(),
+            "ended_at": None,
+        }
+
+    validated = [filtered_waypoints[0]]
+    for i in range(1, len(filtered_waypoints)):
+        dist_m = haversine_m_math(
+            validated[-1][0], validated[-1][1],
+            filtered_waypoints[i][0], filtered_waypoints[i][1],
+        )
+        if dist_m <= 5000:
+            validated.append(filtered_waypoints[i])
+
+    if len(validated) < 2:
+        return {
+            "coordinates": [[w[1], w[0]] for w in validated],
+            "trip_status": "active",
+            "started_at": start_of_today.isoformat(),
+            "ended_at": None,
+        }
+
+    coords = await get_osrm_route_geometry(validated)
+    return {
+        "coordinates": coords,
+        "trip_status": "active",
+        "started_at": start_of_today.isoformat(),
+        "ended_at": None,
+    }
+
+
+
+_TRIP_TRACE_CACHE = {}
+
+@router.get("/trip_trace/{trip_id}")
+async def get_trip_trace(trip_id: int, db: AsyncSession = Depends(get_db)):
+    """Return historical OSRM-snapped trail for the given trip (cached permanently if completed, otherwise 15s)."""
+    now = datetime.now(timezone.utc).timestamp()
+    if trip_id in _TRIP_TRACE_CACHE:
+        cache_time, cache_data = _TRIP_TRACE_CACHE[trip_id]
+        if cache_time == float('inf') or now - cache_time < 15.0:
+            return cache_data
+
+    trip_res = await db.execute(select(Trip).where(Trip.id == trip_id))
+    trip = trip_res.scalar_one_or_none()
+    if not trip or not trip.started_at:
+        return {"coordinates": []}
+        
+    is_permanent = trip.status in ('completed', 'cancelled')
+    cache_time = float('inf') if is_permanent else now
+    
+    end_time = trip.ended_at or datetime.now(timezone.utc)
+    result = await db.execute(
+        select(GpsLog)
+        .where(GpsLog.lat.isnot(None), GpsLog.server_time >= trip.started_at, GpsLog.server_time <= end_time)
+        .order_by(GpsLog.id)
+    )
+    logs = result.scalars().all()
+    
+    if not logs:
+        return {"coordinates": []}
+        
+    # ── Stationary Cluster Filter ──
+    # Collapse slow indoor GPS drift into single centroid points so OSRM
+    # doesn't route through fake side-road detours.
+    raw_tuples = [(log.lat, log.lon) for log in logs]
+    filtered_waypoints = cluster_gps_points(raw_tuples, radius_km=0.030)
+
+    if len(filtered_waypoints) < 2:
+        res = {
+            "coordinates": [[w[1], w[0]] for w in filtered_waypoints],
+            "trip_status": trip.status,
+        }
+        _TRIP_TRACE_CACHE[trip_id] = (cache_time, res)
+        return res
+
+    validated = [filtered_waypoints[0]]
+    for i in range(1, len(filtered_waypoints)):
+        dist_m = haversine_m_math(
+            validated[-1][0], validated[-1][1],
+            filtered_waypoints[i][0], filtered_waypoints[i][1],
+        )
+        if dist_m <= 5000:
+            validated.append(filtered_waypoints[i])
+
+    if len(validated) < 2:
+        res = {
+            "coordinates": [[w[1], w[0]] for w in validated],
+            "trip_status": trip.status,
+        }
+        _TRIP_TRACE_CACHE[trip_id] = (cache_time, res)
+        return res
+
+    # Use OSRM route geometry for smooth road-following curves
+    coords = await get_osrm_route_geometry(validated)
+    res = {
+        "coordinates": coords,
+        "trip_status": trip.status,
+        "started_at": trip.started_at.isoformat() if trip.started_at else None,
+        "ended_at": trip.ended_at.isoformat() if trip.ended_at else None,
+    }
+    _TRIP_TRACE_CACHE[trip_id] = (cache_time, res)
+    return res

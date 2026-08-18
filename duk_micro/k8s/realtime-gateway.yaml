@@ -1,0 +1,19 @@
+# Placeholder for realtime-gateway.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: realtime-gateway
+  namespace: duk-bus
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: realtime-gateway
+  template:
+    metadata:
+      labels:
+        app: realtime-gateway
+    spec:
+      containers:
+      - name: realtime-gateway
+        image: duk-bus/realtime-gateway:latest

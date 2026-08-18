@@ -1,0 +1,19 @@
+# Placeholder for gps-ingestion.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gps-ingestion
+  namespace: duk-bus
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gps-ingestion
+  template:
+    metadata:
+      labels:
+        app: gps-ingestion
+    spec:
+      containers:
+      - name: gps-ingestion
+        image: duk-bus/gps-ingestion:latest

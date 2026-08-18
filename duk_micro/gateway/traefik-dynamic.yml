@@ -1,0 +1,56 @@
+http:
+  routers:
+    gps-ingest:
+      rule: "PathPrefix(`/api/v1/gps`) || PathPrefix(`/ws/device`)"
+      service: gps-ingestion
+    
+    realtime:
+      rule: "PathPrefix(`/ws/bus`)"
+      service: realtime-gateway
+      
+    auth:
+      rule: "PathPrefix(`/api/v1/auth`)"
+      service: auth-service
+      
+    tracking:
+      rule: "PathPrefix(`/api/v1/tracking`) || PathPrefix(`/api/v1/stops`) || PathPrefix(`/api/v1/routes`) || PathPrefix(`/api/v1/latest`) || PathPrefix(`/api/v1/trip_state`) || PathPrefix(`/api/v1/eta`) || PathPrefix(`/api/v1/route_history`) || PathPrefix(`/api/v1/route_geometry`) || PathPrefix(`/api/v1/route_segment`) || PathPrefix(`/api/v1/current_trace`) || PathPrefix(`/api/v1/trip_trace`) || PathPrefix(`/api/v1/snap_route`) || PathPrefix(`/api/v1/history`)"
+      service: tracking-service
+      
+    admin:
+      rule: "PathPrefix(`/api/v1/admin`)"
+      service: admin-service
+      
+    notifications:
+      rule: "PathPrefix(`/api/v1/notifications`) || PathPrefix(`/api/v1/suggestion`)"
+      service: notification-api
+
+  services:
+    gps-ingestion:
+      loadBalancer:
+        servers:
+          - url: "http://gps-ingestion:8001"
+    
+    realtime-gateway:
+      loadBalancer:
+        servers:
+          - url: "http://realtime-gateway:8002"
+          
+    auth-service:
+      loadBalancer:
+        servers:
+          - url: "http://auth-service:8004"
+          
+    tracking-service:
+      loadBalancer:
+        servers:
+          - url: "http://tracking-service:8005"
+          
+    admin-service:
+      loadBalancer:
+        servers:
+          - url: "http://admin-service:8006"
+          
+    notification-api:
+      loadBalancer:
+        servers:
+          - url: "http://notification-api:8007"
