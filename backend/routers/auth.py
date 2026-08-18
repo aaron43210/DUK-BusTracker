@@ -54,8 +54,7 @@ class DeviceTokenRequest(BaseModel):
 
 
 class ProximityPrefsRequest(BaseModel):
-    """Payload for updating a user's proximity alert preferences."""
-    proximity_alert_enabled: bool = False
+    proximity_alert_enabled: Optional[bool] = None
     boarding_alert_stop_id:  Optional[int] = None
     destination_alert_stop_id: Optional[int] = None
     notifications_on:        Optional[bool] = None
@@ -174,13 +173,10 @@ async def update_preferences(
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    user.proximity_alert_enabled = req.proximity_alert_enabled
-    if req.boarding_alert_stop_id is not None:
-        user.boarding_alert_stop_id = req.boarding_alert_stop_id
-    if req.destination_alert_stop_id is not None:
-        user.destination_alert_stop_id = req.destination_alert_stop_id
-    if req.notifications_on is not None:
-        user.notifications_on = req.notifications_on
+    # Apply only the fields explicitly sent in the JSON payload
+    update_data = req.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(user, key, value)
 
     # Reset the alerted-trip flag so the updated preference applies immediately
     user.last_alerted_trip_id = None
