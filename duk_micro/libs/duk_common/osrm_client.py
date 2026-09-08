@@ -8,6 +8,7 @@ import httpx
 import logging
 import math
 import os
+import asyncio
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 
@@ -70,6 +71,23 @@ async def snap_to_road(lat: float, lon: float, bearing: Optional[float] = None) 
             logger.debug("[OSRM] Snap error r=%dm: %s", radius, e)
             break
     return lat, lon
+
+
+async def get_osrm_street_name(lat: float, lon: float) -> Optional[str]:
+    """Fetch the nearest street name from local OSRM for instant fallback."""
+    if not is_within_extract(lat, lon):
+        return None
+    url = f"/nearest/v1/driving/{lon:.6f},{lat:.6f}?number=1"
+    try:
+        resp = await _get_client().get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == "Ok" and data.get("waypoints"):
+                return data["waypoints"][0].get("name")
+    except Exception as e:
+        logger.debug("[OSRM] Street name error: %s", e)
+    return None
+
 
 
 async def get_osrm_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -142,3 +160,76 @@ async def get_osrm_route_geometry(
     except Exception as e:
         logger.debug("[OSRM] Route geometry error: %s", e)
     return None
+
+async def get_osrm_route_geometry_multi(
+    waypoints: List[Tuple[float, float]],
+) -> List[List[float]]:
+    """
+    Multi-waypoint route geometry (route line through N stops).
+    waypoints: list of (lat, lon).
+    Returns list of [lon, lat] pairs (GeoJSON order) — matches frontend map format.
+    Falls back to straight-line waypoints (still [lon, lat]) on OSRM failure.
+    Uses the shared pooled client — NOT a new httpx.AsyncClient per call.
+    """
+    if len(waypoints) < 2:
+        return [[w[1], w[0]] for w in waypoints]
+    coords_str = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in waypoints)
+    url = f"/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+    try:
+        resp = await _get_client().get(url)
+        data = resp.json()
+        if data.get("code") == "Ok" and data.get("routes"):
+            return [[lon, lat] for lon, lat in data["routes"][0]["geometry"]["coordinates"]]
+    except Exception as e:
+        logger.debug("[OSRM] Multi-route geometry error: %s", e)
+    return [[w[1], w[0]] for w in waypoints]
+
+async def get_osrm_match_geometry(
+    waypoints: List[Tuple[float, float]],
+) -> List[List[float]]:
+    """
+    Map matching (HMM) for a GPS trace.
+    waypoints: list of (lat, lon).
+    Returns list of [lon, lat] pairs (GeoJSON order) snapped to the road network.
+    Uses the OSRM /match endpoint instead of /route to avoid detours and false routing.
+    """
+    if len(waypoints) < 2:
+        return [[w[1], w[0]] for w in waypoints]
+    coords_str = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in waypoints)
+    radiuses_str = ";".join(["35"] * len(waypoints))
+    url = f"/match/v1/driving/{coords_str}?overview=full&geometries=geojson&tidy=true&gaps=ignore&radiuses={radiuses_str}"
+    try:
+        resp = await _get_client().get(url)
+        data = resp.json()
+        if data.get("code") == "Ok" and data.get("matchings"):
+            coords = []
+            for match in data["matchings"]:
+                coords.extend([[lon, lat] for lon, lat in match["geometry"]["coordinates"]])
+            return coords
+    except Exception as e:
+        logger.debug("[OSRM] Match geometry error: %s", e)
+    return [[w[1], w[0]] for w in waypoints]
+
+async def snap_points_individually(
+    waypoints: List[Tuple[float, float]],
+) -> List[List[float]]:
+    """
+    Snaps each GPS point independently to the closest road segment using OSRM's /nearest endpoint.
+    This completely bypasses OSRM's routing engine, avoiding false route zig-zags caused by broken OSM connectivity data.
+    """
+    if not waypoints:
+        return []
+    
+    # Process concurrently using the existing snap_to_road function
+    # snap_to_road returns (lat, lon), but GeoJSON expects [lon, lat]
+    tasks = [snap_to_road(lat, lon) for lat, lon in waypoints]
+    snapped = await asyncio.gather(*tasks)
+    
+    return [[lon, lat] for lat, lon in snapped]
+
+async def close_client() -> None:
+    """Call on service shutdown to release the pooled connection."""
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None

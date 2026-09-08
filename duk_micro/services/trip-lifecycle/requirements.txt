@@ -1,3 +1,8 @@
-redis
+fastapi
+uvicorn[standard]
 pydantic
-SQLAlchemy
+pydantic-settings
+redis
+SQLAlchemy[asyncio]
+asyncpg
+httpx

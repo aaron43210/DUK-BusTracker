@@ -51,3 +51,11 @@ class GpsLog(Base):
     ist_time    = Column(DateTime(timezone=False), nullable=True)
     server_time = Column("created_at", DateTime(timezone=True), server_default=func.now())
     trip_id     = Column(Integer, nullable=True)
+    gps_time    = Column(DateTime(timezone=True), nullable=True)
+    source      = Column(String(20), nullable=True, index=True)
+
+
+class Route(Base):
+    __tablename__ = "routes"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)

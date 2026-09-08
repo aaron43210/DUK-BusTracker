@@ -23,11 +23,11 @@ class User(Base):
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
     last_seen        = Column(DateTime(timezone=True), onupdate=func.now())
     
-    # ── Authentication ────────────────────────────────────────────────────────
-    otp_code         = Column(String(10), nullable=True)
+    #  Authentication 
+    otp_code         = Column(String(64), nullable=True)
     otp_expires_at   = Column(DateTime(timezone=True), nullable=True)
 
-    # ── Per-user proximity alert preferences ──────────────────────────────────
+    #  Per-user proximity alert preferences 
     proximity_alert_enabled = Column(Boolean, default=False)
     boarding_alert_stop_id = Column(Integer, nullable=True)
     destination_alert_stop_id = Column(Integer, nullable=True)

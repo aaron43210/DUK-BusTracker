@@ -1,10 +1,13 @@
-asyncio
 httpx
 joblib
 lightgbm
 numpy
 redis
-scikit-learn
+scikit-learn==1.7.2
 SQLAlchemy
 aiosqlite
 asyncpg
+skl2onnx==1.17.0
+onnxmltools
+onnx<=1.16.1
+psycopg2-binary

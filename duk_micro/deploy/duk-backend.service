@@ -1,0 +1,72 @@
+# /etc/systemd/system/duk-backend.service
+#
+# Systemd service for the DUK Bus Tracker backend.
+#
+# This makes the backend:
+#   - Start automatically when the server boots
+#   - Restart automatically if it crashes (after 5 seconds)
+#   - Run as the unprivileged 'duk' user (not root — safer)
+#   - Log to the system journal (view with: journalctl -u duk-backend -f)
+#
+# Commands:
+#   Start:   systemctl start duk-backend
+#   Stop:    systemctl stop duk-backend
+#   Restart: systemctl restart duk-backend
+#   Logs:    journalctl -u duk-backend -n 100 --no-pager
+#   Status:  systemctl status duk-backend
+
+[Unit]
+Description=DUK Bus Tracker Backend (mega-gateway)
+Documentation=https://github.com/your-org/duk-bus-tracker
+
+# Only start after network, database, and Redis are ready
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=exec
+
+# Run as the unprivileged 'duk' user — never run as root
+User=duk
+Group=duk
+
+# Working directory — must contain mega_gateway.py
+WorkingDirectory=/opt/duk_micro
+
+# Load all secrets from the production env file
+EnvironmentFile=/etc/duk/production.env
+
+# Start the backend:
+#   --workers 1   → single worker (services share state via Redis, not memory)
+#   --loop uvloop → faster async event loop than default asyncio
+#   --host 127.0.0.1 → only accept connections from Nginx, not directly from internet
+ExecStart=/opt/duk_venv/bin/uvicorn mega_gateway:app \
+          --host 127.0.0.1 \
+          --port 8000 \
+          --workers 1 \
+          --loop uvloop \
+          --access-log \
+          --log-level info
+
+# Restart policy
+Restart=always
+RestartSec=5         # Wait 5 seconds before restarting (prevents crash loop)
+StartLimitBurst=5    # If it crashes 5 times in a row, stop trying
+StartLimitInterval=60
+
+# Resource limits (safety caps)
+LimitNOFILE=65536    # Max open file descriptors (needed for many WebSocket connections)
+
+# Security hardening — restrict what the process can do
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/duk_micro /tmp
+
+# Log to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=duk-backend
+
+[Install]
+WantedBy=multi-user.target

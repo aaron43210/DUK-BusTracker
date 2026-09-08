@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+
+    <meta name="theme-color" content="#A2D7C3" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="DUK Bus" />
+
+    <title>DUK Bus Tracker</title>
+    <meta
+      name="description"
+      content="Real-time bus tracking for Digital University Kerala students."
+    />
+
+    <link rel="apple-touch-icon" href="/buslogo.png" />
+    <link rel="icon" href="/buslogo.png" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Critical splash styling so the loading screen is visible before JS/CSS loads -->
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+      }
+
+      .splash-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        background-color: #020b22;
+        background-image: url("/splash_screen.png");
+        background-size: 100% 100%;
+        background-position: center;
+        background-repeat: no-repeat;
+      }
+
+      .splash-overlay {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          to bottom,
+          rgba(1, 12, 42, 0.45),
+          rgba(1, 18, 55, 0.1) 45%,
+          rgba(1, 9, 30, 0.65)
+        );
+      }
+
+      .splash-content {
+        position: absolute;
+        bottom: 8%;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2;
+        text-align: center;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .splash-loader {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 3px solid rgba(255, 255, 255, 0.15);
+        border-top-color: #10a8ff;
+        border-right-color: #67e6ae;
+        animation: splash-spin 1s linear infinite;
+        margin: 0 auto 12px;
+      }
+
+      @keyframes splash-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .splash-text {
+        font-size: 14px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root">
+      <div class="splash-screen">
+        <div class="splash-overlay"></div>
+        <div class="splash-content">
+          <div class="splash-loader"></div>
+          <div class="splash-text">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

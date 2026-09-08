@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 AUTO_COMPLETE_INTERVAL_S = 300  # 5 minutes
 
 
-# ── GPS stream consumer ────────────────────────────────────────────────────────
+#  GPS stream consumer 
 
 async def handle_gps_event(event_data: dict):
     logger.debug("[LIFECYCLE] Consuming GPS event")
@@ -44,7 +44,7 @@ async def handle_gps_event(event_data: dict):
             logger.exception("[LIFECYCLE] Error processing GPS event: %s", e)
 
 
-# ── POWER pub/sub listener ─────────────────────────────────────────────────────
+#  POWER pub/sub listener 
 
 async def power_event_listener():
     """Listens to the 'bus:power' Redis pub/sub channel for POWER_ON/POWER_LOST."""
@@ -73,7 +73,7 @@ async def power_event_listener():
             logger.exception("[LIFECYCLE] Power event handler error: %s", exc)
 
 
-# ── Periodic auto-complete ─────────────────────────────────────────────────────
+#  Periodic auto-complete 
 
 async def periodic_auto_complete():
     """Every AUTO_COMPLETE_INTERVAL_S seconds, expire time-window-exceeded trips."""
@@ -88,7 +88,21 @@ async def periodic_auto_complete():
             logger.error("[LIFECYCLE] Periodic auto-complete error: %s", exc)
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+#  Heartbeat Loop for K8s exec liveness probe 
+HEARTBEAT_FILE = "/tmp/heartbeat"
+
+async def heartbeat_loop():
+    """Update a file every 15s so K8s exec probes know the event loop is alive."""
+    while True:
+        try:
+            with open(HEARTBEAT_FILE, "w") as f:
+                f.write(str(datetime.now(timezone.utc).timestamp()))
+        except Exception as e:
+            logger.error("[LIFECYCLE] Failed to write heartbeat: %s", e)
+        await asyncio.sleep(15)
+
+
+#  Entry point 
 
 async def main():
     redis = await get_redis()
@@ -113,6 +127,7 @@ async def main():
         ),
         asyncio.create_task(power_event_listener()),
         asyncio.create_task(periodic_auto_complete()),
+        asyncio.create_task(heartbeat_loop()),
     ]
 
     try:

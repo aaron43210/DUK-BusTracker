@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────
+# Git ignore for DUK Bus Tracker PWA (duk_pwa)
+# ─────────────────────────────────────────────────
+
+# ── Secrets — NEVER commit these ──────────────────
+.env
+.env.production
+.env.local
+google-services.json
+firebase.txt
+
+# ── Build output ───────────────────────────────────
+dist/
+.vite/
+
+# ── Node dependencies ──────────────────────────────
+node_modules/
+
+# ── Dev test files ─────────────────────────────────
+test_*.js
+test_*.mjs
+
+# ── OS artifacts ───────────────────────────────────
+.DS_Store
+Thumbs.db

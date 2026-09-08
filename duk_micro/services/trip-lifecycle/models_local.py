@@ -63,7 +63,7 @@ class User(Base):
     """Minimal projection of the users table — used to look up FCM tokens on trip start."""
     __tablename__ = "users"
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email_verified   = Column(Boolean, default=False)
+    verified         = Column(Boolean, default=False)
     device_token     = Column(String, nullable=True)
     notifications_on = Column(Boolean, default=True)
     # Monolith per-user proximity preference columns
@@ -82,4 +82,6 @@ class GpsLog(Base):
     speed       = Column(Float, nullable=True)
     server_time = Column("created_at", DateTime(timezone=True), server_default=func.now())
     trip_id     = Column(Integer, nullable=True)
+    gps_time    = Column(DateTime(timezone=True), nullable=True)
+    source      = Column(String(20), nullable=True, index=True)
 

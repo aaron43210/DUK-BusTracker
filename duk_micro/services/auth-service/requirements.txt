@@ -1,4 +1,9 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
+pydantic-settings
 python-jose[cryptography]
+SQLAlchemy[asyncio]
+asyncpg
+redis
+email-validator

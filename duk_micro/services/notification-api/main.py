@@ -1,5 +1,26 @@
 # services/notification-api/main.py
-"""Notification API — Handles frontend requests to save preferences."""
+"""
+Notification API — Manages in-app notifications and user notification preferences.
+
+This service handles the passenger-facing notification layer:
+  - Saves FCM notification preferences (which stops to alert on, FCM token)
+  - Retrieves in-app notification history for the logged-in user
+  - Marks notifications as read
+  - Retrieves admin broadcast messages
+  - Receives student suggestions from the PWA
+
+Note: Actual push notification SENDING is done by the notification-service
+(which listens to Redis events from trip-lifecycle). This API only handles
+the CRUD side (preferences, history, suggestions).
+
+Endpoints:
+  POST   /api/v1/notifications/preferences   — Save FCM token + stop preferences
+  GET    /api/v1/notifications               — Get notification history
+  PUT    /api/v1/notifications/{id}/read     — Mark notification as read
+  GET    /api/v1/notifications/broadcasts    — Get admin broadcast messages
+  POST   /api/v1/suggestion                 — Submit a suggestion
+  GET    /health                             — Health check
+"""
 import os
 import sys
 import uuid
@@ -16,8 +37,11 @@ from libs.duk_common.settings import get_settings
 from database_local import get_db, AsyncSessionLocal
 from models_local import UserNotificationPreference, InAppNotification, Suggestion, AdminBroadcast
 
+from libs.duk_common.middleware import configure_app
+
 app = FastAPI(title="notification-api")
 settings = get_settings()
+configure_app(app, allowed_origins=settings.allowed_origins_list)
 
 get_current_user_id = make_get_current_user_id(settings.SECRET_KEY, settings.ALGORITHM)
 

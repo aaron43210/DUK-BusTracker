@@ -15,9 +15,21 @@ class User(Base):
     __tablename__ = "users"
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email            = Column(String(120), unique=True, nullable=False)
-    email_verified   = Column(Boolean, default=False)
+    verified         = Column(Boolean, default=False)
     device_token     = Column(String, nullable=True)       # FCM token
     notifications_on = Column(Boolean, default=True)
+
+
+class UserNotificationPreference(Base):
+    __tablename__ = "user_notification_preferences"
+    id                  = Column(Integer, primary_key=True, index=True)
+    user_id             = Column(UUID(as_uuid=True), nullable=True)
+    route_id            = Column(Integer, nullable=False, default=1)
+    direction           = Column(String(20), nullable=False)
+    boarding_stop_id    = Column(Integer, nullable=True)
+    destination_stop_id = Column(Integer, nullable=True)
+    fcm_token           = Column(String(512), nullable=True)
+    is_active           = Column(Boolean, default=True)
 
 
 class InAppNotification(Base):

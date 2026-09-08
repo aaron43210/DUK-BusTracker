@@ -1,221 +1,125 @@
-version: '3.8'
-
 services:
-  gateway:
-    image: traefik:v2.10
-    command:
-      - "--api.insecure=true"
-      - "--providers.file.directory=/etc/traefik"
-      - "--providers.file.watch=true"
-      - "--entrypoints.web.address=:8000"
-    ports:
-      - "8000:8000"
-      - "8080:8080" # Traefik dashboard
+  # ==========================================
+  # Infrastructure Services
+  # ==========================================
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: duk
+      POSTGRES_PASSWORD: dukpassword
+      POSTGRES_DB: duk_bus
     volumes:
-      - ./duk_micro/gateway:/etc/traefik
+      - postgres_data:/var/lib/postgresql/data
+      - ./duk_micro/schema.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
     networks:
       - bus-net
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    networks:
-      - bus-net
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: duk
-      POSTGRES_PASSWORD: dukpassword
-      POSTGRES_DB: duk_bus
-    ports:
-      - "5432:5432"
-    networks:
-      - bus-net
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - redis_data:/data
+    networks:
+      - bus-net
 
   osrm-backend:
-    image: osrm/osrm-backend
-    command: "osrm-routed --algorithm mld /data/kerala-latest.osrm"
+    image: osrm/osrm-backend:latest
+    restart: unless-stopped
+    command: ["osrm-routed", "--algorithm", "mld", "/data/trivandrum_patched.osrm"]
     volumes:
       - ./duk_micro/osrm-data:/data
     networks:
       - bus-net
 
-  gps-ingestion:
-    build: 
+  # ==========================================
+  # Application Services (Combined)
+  # ==========================================
+  core-api:
+    image: duk_micro_unified:latest
+    build:
       context: ./duk_micro
-      dockerfile: services/gps-ingestion/Dockerfile
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./duk_micro/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-      - GPS_API_KEY=local-dev-key
       - OSRM_URL=http://osrm-backend:5000
-    networks:
-      - bus-net
     depends_on:
-      - redis
       - postgres
-
-  realtime-gateway:
-    build:
-      context: ./duk_micro
-      dockerfile: services/realtime-gateway/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-    networks:
-      - bus-net
-    depends_on:
       - redis
-
-  trip-lifecycle:
-    build:
-      context: ./duk_micro
-      dockerfile: services/trip-lifecycle/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-      - OSRM_URL=http://osrm-backend:5000
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  auth-service:
-    build:
-      context: ./duk_micro
-      dockerfile: services/auth-service/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-      - JWT_SECRET=dev-secret-key
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  tracking-service:
-    build:
-      context: ./duk_micro
-      dockerfile: services/tracking-service/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-      - OSRM_URL=http://osrm-backend:5000
-      - ETA_ML_URL=http://eta-ml-service:8000
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  admin-service:
-    build:
-      context: ./duk_micro
-      dockerfile: services/admin-service/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-      - ADMIN_TOKEN=secret-admin-token
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  notification-api:
-    build:
-      context: ./duk_micro
-      dockerfile: services/notification-api/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  notification-worker:
-    build:
-      context: ./duk_micro
-      dockerfile: services/notification-service/Dockerfile
-    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info"]
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://duk:dukpassword@postgres/duk_bus
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  notification-consumer:
-    build:
-      context: ./duk_micro
-      dockerfile: services/notification-service/Dockerfile
-    command: ["python", "event_consumer.py"]
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  notification-scheduler:
-    build:
-      context: ./duk_micro
-      dockerfile: services/notification-service/Dockerfile
-    command: ["python", "scheduled_dispatcher.py"]
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-    networks:
-      - bus-net
-    depends_on:
-      - redis
-      - postgres
-
-  eta-ml-service:
-    build:
-      context: ./duk_micro
-      dockerfile: services/eta-ml-service/Dockerfile
-    environment:
-      - OSRM_URL=http://osrm-backend:5000
+      - osrm-backend
     volumes:
-      - model-data:/app/models
+      - ./duk_micro/models:/app/models
+      - audit_logs:/app/logs
+    networks:
+      - bus-net
+    labels:
+      - "traefik.enable=true"
+      # Route traffic matching /api, /ws, /docs to this container (works with any IP or domain)
+      - "traefik.http.routers.core-api.rule=PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
+      - "traefik.http.routers.core-api.entrypoints=web"
+      # Optional Let's Encrypt (requires uncommenting cert resolver in traefik args)
+      # - "traefik.http.routers.core-api-secure.rule=(Host(`duk.ac.in`) || Host(`localhost`)) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`))"
+      # - "traefik.http.routers.core-api-secure.entrypoints=websecure"
+      # - "traefik.http.routers.core-api-secure.tls.certresolver=myresolver"
+
+  background-workers:
+    image: duk_micro_unified:latest
+    build:
+      context: ./duk_micro
+      dockerfile: Dockerfile
+    command: ["/bin/bash", "/app/start_workers.sh"]
+    restart: unless-stopped
+    env_file:
+      - ./duk_micro/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./duk_micro/models:/app/models
     networks:
       - bus-net
 
-  ml-training-job:
-    build:
-      context: ./duk_micro
-      dockerfile: services/ml-training-job/Dockerfile
+  # ==========================================
+  # Reverse Proxy
+  # ==========================================
+  gateway:
+    image: traefik:latest
+    restart: unless-stopped
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # To enable Let's Encrypt SSL, uncomment the lines below and add your email
+      # - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      # - "--certificatesresolvers.myresolver.acme.email=admin@duk.ac.in"
+      # - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres/duk_bus
-      - REDIS_URL=redis://redis:6379/0
-      - ETA_ML_URL=http://eta-ml-service:8000
-      - MODEL_PATH=/data/models/eta_model.pkl
+      - DOCKER_API_VERSION=1.41
     volumes:
-      - model-data:/data/models
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "letsencrypt_data:/letsencrypt"
     networks:
       - bus-net
-    depends_on:
-      - redis
-      - postgres
 
 networks:
   bus-net:
     driver: bridge
 
 volumes:
-  pgdata:
-  model-data:
+  postgres_data:
+  redis_data:
+  letsencrypt_data:
+  audit_logs:

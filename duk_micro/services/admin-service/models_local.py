@@ -61,13 +61,15 @@ class GpsLog(Base):
     ist_time    = Column(DateTime(timezone=False), nullable=True)
     server_time = Column("created_at", DateTime(timezone=True), server_default=func.now())
     trip_id     = Column(Integer, nullable=True)
+    gps_time    = Column(DateTime(timezone=True), nullable=True)
+    source      = Column(String(20), nullable=True, index=True)
 
 
 class User(Base):
     __tablename__ = "users"
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email            = Column(String(120), unique=True)
-    email_verified   = Column(Boolean, default=False)
+    verified         = Column(Boolean, default=False)
     device_token     = Column(String, nullable=True)
     notifications_on = Column(Boolean, default=True)
 
@@ -115,3 +117,23 @@ class InAppNotification(Base):
     type       = Column(String(50), nullable=False)
     is_read    = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+    id             = Column(BigInteger, primary_key=True, autoincrement=True)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+    ist_time       = Column(DateTime(timezone=False), nullable=True)
+    admin_username = Column(String(100), nullable=False, default="admin")
+    action         = Column(String(50), nullable=False)
+    endpoint       = Column(String(255), nullable=True)
+    method         = Column(String(10), nullable=True)
+    ip_address     = Column(String(50), nullable=True)
+    device_os      = Column(String(100), nullable=True)
+    browser        = Column(String(100), nullable=True)
+    user_agent     = Column(Text, nullable=True)
+    location_info  = Column(JSON, nullable=True)
+    changes        = Column(JSON, nullable=True)
+    status_code    = Column(Integer, default=200)
+    success        = Column(Boolean, default=True)
+

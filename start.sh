@@ -1,28 +1,37 @@
 #!/bin/bash
 set -e
 
-echo "Starting Mega-Container initialization..."
+echo "============================================="
+echo "   DUK Bus Tracker - 1-Click Startup Script"
+echo "============================================="
+echo ""
 
-# 1. Start Postgres in the background
-echo "Starting PostgreSQL..."
-service postgresql start
+# Check Docker
+if ! command -v docker &> /dev/null; then
+    echo "[!] Docker is not installed. Please install Docker from https://www.docker.com/"
+    exit 1
+fi
 
-# Wait for Postgres to be ready
-until su - postgres -c "psql -c '\q'"; do
-  >&2 echo "Postgres is unavailable - sleeping"
-  sleep 1
-done
+echo "[1/3] Starting backend services with Docker Compose..."
+docker compose up -d --build
 
-# Initialize database and user if they don't exist
-echo "Setting up Postgres Database..."
-su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='duk'\" | grep -q 1 || psql -c \"CREATE USER duk WITH PASSWORD 'dukpassword';\""
-su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='duk_bus'\" | grep -q 1 || psql -c \"CREATE DATABASE duk_bus OWNER duk;\""
-su - postgres -c "psql -c \"ALTER USER duk WITH SUPERUSER;\""
+echo "[2/3] Starting Admin Dashboard (http://localhost:5173)..."
+(cd admin-dashboard && [ ! -d "node_modules" ] && npm install --silent; npm run dev) &
+ADMIN_PID=$!
 
-# 2. Start Redis in the background
-echo "Starting Redis..."
-service redis-server start
+echo "[3/3] Starting Passenger PWA (http://localhost:5174)..."
+(cd duk_pwa && [ ! -d "node_modules" ] && npm install --silent; npm run dev) &
+PWA_PID=$!
 
-# 3. Start Supervisord to manage all Python processes
-echo "Starting Supervisord (Python Microservices)..."
-/usr/bin/supervisord -c /app/supervisord.conf
+echo ""
+echo "============================================="
+echo "  All services running!"
+echo "  - Admin Dashboard: http://localhost:5173"
+echo "  - Passenger PWA:   http://localhost:5174"
+echo "  - Backend API:     http://localhost/api/v1/stops"
+echo "  - Login:           admin / admin"
+echo "============================================="
+echo "Press Ctrl+C to stop frontends."
+
+trap "kill $ADMIN_PID $PWA_PID 2>/dev/null; exit" SIGINT SIGTERM
+wait

@@ -48,7 +48,7 @@ async def dispatch_due_notifications():
         from models_local import User
         tokens_result = await db.execute(
             select(User.device_token).where(
-                User.email_verified == True,
+                User.verified == True,
                 User.notifications_on != False,
                 User.device_token.isnot(None),
             )

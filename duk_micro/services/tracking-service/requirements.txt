@@ -1,5 +1,8 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
+pydantic-settings
 redis
-SQLAlchemy
+SQLAlchemy[asyncio]
+asyncpg
+httpx

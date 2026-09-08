@@ -18,3 +18,4 @@ class GpsLog(Base):
     event = Column(String(30), nullable=True)
     gps_time = Column(DateTime(timezone=True), nullable=True)
     trip_id = Column(Integer, nullable=True)
+    source = Column(String(20), nullable=True, index=True)

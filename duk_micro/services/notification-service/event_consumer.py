@@ -26,7 +26,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# ── Handlers ──────────────────────────────────────────────────────────────────
+#  Handlers 
+
+async def handle_auth_otp(event_data: dict):
+    logger.info("[NOTIF] Received auth.otp event: %s", {k: v for k, v in event_data.items() if k != 'otp'})
+    email = event_data.get("email")
+    name = event_data.get("name")
+    otp = event_data.get("otp")
+
+    if not email or not otp:
+        return
+
+    # Use asyncio.to_thread to run the synchronous SMTP function in the background
+    # We dynamically import it since event_consumer runs in the shared container environment
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../auth-service"))
+    from email_helper import send_otp_email
+
+    try:
+        await asyncio.to_thread(send_otp_email, email, name, otp)
+    except Exception as e:
+        logger.error("[NOTIF] Failed to send OTP email in worker: %s", e)
+
 
 async def handle_proximity_alert(event_data: dict):
     logger.info("[NOTIF] Proximity alert: %s", event_data)
@@ -77,7 +98,7 @@ async def handle_trip_started(event_data: dict):
         # Fetch all verified users who have notifications enabled and have a device token
         result = await db.execute(
             select(User).where(
-                User.email_verified == True,
+                User.verified == True,
                 User.notifications_on != False,
                 User.device_token.isnot(None),
             )
@@ -114,7 +135,7 @@ async def handle_scheduled_notification(event_data: dict):
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(User).where(
-                User.email_verified == True,
+                User.verified == True,
                 User.notifications_on != False,
                 User.device_token.isnot(None),
             )
@@ -131,7 +152,7 @@ async def handle_scheduled_notification(event_data: dict):
     logger.info("[NOTIF] Scheduled notif %s dispatched to %d devices", notif_id, len(tokens))
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
+#  Entry Point 
 
 async def main():
     redis = await get_redis()
@@ -143,6 +164,7 @@ async def main():
         ("notifications.late_eta",    "notif-late-eta-group",   "worker-1", handle_late_eta),
         ("notifications.trip_started","notif-trip-start-group", "worker-1", handle_trip_started),
         ("notifications.scheduled",   "notif-scheduled-group",  "worker-1", handle_scheduled_notification),
+        ("auth.otp",                  "notif-auth-otp-group",   "worker-1", handle_auth_otp),
     ]
 
     tasks = [

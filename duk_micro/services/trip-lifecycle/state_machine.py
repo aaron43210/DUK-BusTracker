@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
-# ── Constants (mirrors monolith constants.py) ──────────────────────────────────
+#  Constants (mirrors monolith constants.py) 
 DESTINATION_RADIUS_M = 300
 GRACE_PERIOD_S       = 1200     # 20 minutes
 MOVEMENT_THRESHOLD_M = 50
@@ -51,7 +51,7 @@ EVENING_END_MINS     = 1230     # 20:30 IST in minutes
 COMPLETION_TIMERS: dict = {}
 
 
-# ── Time helpers ───────────────────────────────────────────────────────────────
+#  Time helpers 
 
 def to_ist(utc_dt: datetime) -> datetime:
     return utc_dt + IST_OFFSET
@@ -78,7 +78,7 @@ def parse_time_to_minutes(time_str: str) -> int:
 
 
 
-# ── Stop coordinate helpers ────────────────────────────────────────────────────
+#  Stop coordinate helpers 
 
 async def get_start_coords(db: AsyncSession, direction: str) -> Tuple[float, float]:
     col = BusStop.is_morning_origin if direction == "forward" else BusStop.is_evening_origin
@@ -108,7 +108,7 @@ async def get_destination_coords(db: AsyncSession, direction: str) -> Tuple[floa
     return (8.6158, 76.8527) if direction == "forward" else (8.5350, 76.9908)
 
 
-# ── Trip lookup ────────────────────────────────────────────────────────────────
+#  Trip lookup 
 
 async def get_active_trip(db: AsyncSession, now_ist: datetime) -> Optional[Trip]:
     """Return today's IST-date trip that is eligible for GPS-driven transitions."""
@@ -132,7 +132,7 @@ async def get_active_trip(db: AsyncSession, now_ist: datetime) -> Optional[Trip]
     return result.scalar_one_or_none()
 
 
-# ── Trip-started fan-out ───────────────────────────────────────────────────────
+#  Trip-started fan-out 
 
 async def _notify_trip_started_event(bus: EventBus, trip: Trip) -> None:
     """Publish TripStartedEvent so notification-service fans out FCM + in-app."""
@@ -141,7 +141,7 @@ async def _notify_trip_started_event(bus: EventBus, trip: Trip) -> None:
     logger.info("[LIFECYCLE] Published TripStartedEvent for trip #%d", trip.id)
 
 
-# ── Grace timer ────────────────────────────────────────────────────────────────
+#  Grace timer 
 
 async def _complete_trip_after_grace(trip_id: int, bus: EventBus) -> None:
     """Wait GRACE_PERIOD_S then mark trip completed if still active."""
@@ -166,32 +166,80 @@ def _cancel_grace_timer(trip_id: int) -> None:
         logger.info("[LIFECYCLE] Grace timer cancelled for trip #%d", trip_id)
 
 
-# ── Proximity alerts (3-type system, mirrors proximity_alerts.py) ───────────────
+#  Proximity alerts (3-type system, mirrors proximity_alerts.py) 
 
 async def _get_boarding_tokens(db: AsyncSession, route_id: int, stop_id: int, direction: str) -> List[str]:
-    """Tokens from new user_notification_preferences table (boarding alert)."""
-    result = await db.execute(
-        select(UserNotificationPreference.fcm_token).where(
-            UserNotificationPreference.route_id     == route_id,
-            UserNotificationPreference.direction    == direction,
-            UserNotificationPreference.boarding_stop_id == stop_id,
-            UserNotificationPreference.is_active    == True,
+    """Tokens from user_notification_preferences and User table (boarding alert)."""
+    tokens = set()
+    try:
+        res1 = await db.execute(
+            select(UserNotificationPreference.fcm_token).where(
+                UserNotificationPreference.route_id == route_id,
+                UserNotificationPreference.direction == direction,
+                UserNotificationPreference.boarding_stop_id == stop_id,
+                UserNotificationPreference.is_active == True,
+            )
         )
-    )
-    return [r[0] for r in result.all() if r[0]]
+        for r in res1.all():
+            if r[0]:
+                tokens.add(r[0])
+    except Exception:
+        pass
+
+    try:
+        res2 = await db.execute(
+            select(User.device_token).where(
+                User.verified == True,
+                User.notifications_on != False,
+                User.proximity_alert_enabled == True,
+                User.boarding_alert_stop_id == stop_id,
+                User.device_token.isnot(None),
+            )
+        )
+        for r in res2.all():
+            if r[0]:
+                tokens.add(r[0])
+    except Exception:
+        pass
+
+    return list(tokens)
 
 
 async def _get_destination_tokens(db: AsyncSession, route_id: int, stop_id: int, direction: str) -> List[str]:
     """Tokens for users whose destination is this stop."""
-    result = await db.execute(
-        select(UserNotificationPreference.fcm_token).where(
-            UserNotificationPreference.route_id          == route_id,
-            UserNotificationPreference.direction         == direction,
-            UserNotificationPreference.destination_stop_id == stop_id,
-            UserNotificationPreference.is_active         == True,
+    tokens = set()
+    try:
+        res1 = await db.execute(
+            select(UserNotificationPreference.fcm_token).where(
+                UserNotificationPreference.route_id == route_id,
+                UserNotificationPreference.direction == direction,
+                UserNotificationPreference.destination_stop_id == stop_id,
+                UserNotificationPreference.is_active == True,
+            )
         )
-    )
-    return [r[0] for r in result.all() if r[0]]
+        for r in res1.all():
+            if r[0]:
+                tokens.add(r[0])
+    except Exception:
+        pass
+
+    try:
+        res2 = await db.execute(
+            select(User.device_token).where(
+                User.verified == True,
+                User.notifications_on != False,
+                User.proximity_alert_enabled == True,
+                User.destination_alert_stop_id == stop_id,
+                User.device_token.isnot(None),
+            )
+        )
+        for r in res2.all():
+            if r[0]:
+                tokens.add(r[0])
+    except Exception:
+        pass
+
+    return list(tokens)
 
 
 async def run_proximity_alerts(
@@ -249,7 +297,7 @@ async def run_proximity_alerts(
             logger.info("[LIFECYCLE] Proximity alert fired for stop %s (trip #%d)", stop_name, trip.id)
 
 
-# ── ETA late notification ──────────────────────────────────────────────────────
+#  ETA late notification 
 
 async def check_eta_late_notification(
     db:       AsyncSession,
@@ -306,7 +354,7 @@ async def check_eta_late_notification(
     logger.info("[LIFECYCLE] ETA late notification fired for trip #%d (%.0f min late)", trip.id, delay_min)
 
 
-# ── Visited stops + auto-catch-up ──────────────────────────────────────────────
+#  Visited stops + auto-catch-up 
 
 async def update_visited_stops(db: AsyncSession, bus: EventBus, trip: Trip, lat: float, lon: float, stops: List[dict]) -> None:
     """OSRM distance matrix to unvisited stops; mark within STOP_ALERT_RADIUS_M visited."""
@@ -360,7 +408,7 @@ async def update_visited_stops(db: AsyncSession, bus: EventBus, trip: Trip, lat:
     await bus.publish("trip.status", ev)
 
 
-# ── Auto-complete expired trips ────────────────────────────────────────────────
+#  Auto-complete expired trips 
 
 async def auto_complete_expired_trips(db: AsyncSession) -> bool:
     """
@@ -400,7 +448,7 @@ async def auto_complete_expired_trips(db: AsyncSession) -> bool:
     return modified
 
 
-# ── POWER event handlers ───────────────────────────────────────────────────────
+#  POWER event handlers 
 
 async def handle_power_on(db: AsyncSession, bus: EventBus, now_utc: datetime) -> None:
     now_ist = to_ist(now_utc)
@@ -434,7 +482,7 @@ async def handle_power_off(db: AsyncSession, bus: EventBus, now_utc: datetime) -
     logger.info("[LIFECYCLE] POWER_LOST near_destination=%s", near_destination)
 
 
-# ── Main GPS event processor ───────────────────────────────────────────────────
+#  Main GPS event processor 
 
 async def process_gps_event(event_data: dict, db: AsyncSession, redis: Redis) -> None:
     """
@@ -457,7 +505,7 @@ async def process_gps_event(event_data: dict, db: AsyncSession, redis: Redis) ->
     if not trip:
         return
 
-    # ── scheduled -> on_trip ───────────────────────────────────────────────────
+    #  scheduled -> on_trip 
     if trip.status == "scheduled":
         if trip.direction == "reverse" and now_ist.hour < 17:
             return
@@ -478,7 +526,7 @@ async def process_gps_event(event_data: dict, db: AsyncSession, redis: Redis) ->
             ev = TripStatusEvent(trip_id=trip.id, status="on_trip", direction=trip.direction)
             await bus.publish("trip.status", ev)
 
-    # ── on_trip / late -> completed + proximity alerts ─────────────────────────
+    #  on_trip / late -> completed + proximity alerts 
     elif trip.status in ("on_trip", "late"):
         dest_lat, dest_lon = await get_destination_coords(db, trip.direction)
 
@@ -500,13 +548,18 @@ async def process_gps_event(event_data: dict, db: AsyncSession, redis: Redis) ->
             await bus.publish("trip.status", ev)
             return
 
-        # Visited stops + ETA late + proximity alerts concurrently
+        # Visited stops + ETA late + proximity alerts executed sequentially for AsyncSession thread-safety
         try:
-            await asyncio.gather(
-                update_visited_stops(db, bus, trip, lat, lon, stops),
-                check_eta_late_notification(db, bus, trip, lat, lon, dest_lat, dest_lon),
-                run_proximity_alerts(db, bus, redis, trip, lat, lon, stops),
-                return_exceptions=True,
-            )
+            await update_visited_stops(db, bus, trip, lat, lon, stops)
         except Exception as exc:
-            logger.warning("[LIFECYCLE] Alert/stop checks failed: %s", exc)
+            logger.warning("[LIFECYCLE] update_visited_stops failed: %s", exc)
+
+        try:
+            await check_eta_late_notification(db, bus, trip, lat, lon, dest_lat, dest_lon)
+        except Exception as exc:
+            logger.warning("[LIFECYCLE] check_eta_late_notification failed: %s", exc)
+
+        try:
+            await run_proximity_alerts(db, bus, redis, trip, lat, lon, stops)
+        except Exception as exc:
+            logger.warning("[LIFECYCLE] run_proximity_alerts failed: %s", exc)

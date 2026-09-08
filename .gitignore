@@ -1,4 +1,54 @@
-backend/
-duk_pwa/
-pwa-frontend/
+# Original rules
+
 .DS_Store
+
+# Secrets & Environment Variables (Keep .env.example if exists)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+google-services.json
+firebase.txt
+
+# Node modules & dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+
+# Vite/Build tools
+.vite/
+dist/
+build/
+out/
+coverage/
+
+# OS/Editor
+Thumbs.db
+.vscode/
+.idea/
+postgres_data/
