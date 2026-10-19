@@ -102,7 +102,7 @@ export default function NotificationDrawer({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div className="modal-overlay" ref={overlayRef} onClick={handleOverlayClick}>
       <div
         className="modal-content notification-modal"
         role="dialog"

@@ -33,48 +33,6 @@ function isTimeWindowPassed(isoDate, dir) {
 
 // ── Action visibility rules ───────────────────────────────────────────────────
 
-// Checks if actions (Late, Cancel, etc.) are allowed for this trip
-function isTripInActiveWindow(trip) {
-
-  // Do not allow actions if the trip is already completed
-  if (trip.status === 'completed') return false;
-
-  // Convert trip date to a Date object
-  const tripDate = new Date(trip.date + 'T00:00:00');
-
-  // Get today's date (time set to 00:00:00 for comparison)
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  // Allow actions only for today's trips
-  if (tripDate.getTime() !== today.getTime()) return false;
-
-  // Get current IST time in minutes
-  const mins = totalMinsIST();
-
-  // Check if this is a morning (forward) trip
-  const isMorning =
-    trip.direction === 'forward' ||
-    trip.direction === 'morning' ||
-    trip.direction === 'Morning';
-
-  // Check if current time is within the allowed time window
-  return isMorning
-    ? (mins >= 6 * 60 && mins <= 11 * 60)        // Morning: 6:00 AM – 11:00 AM
-    : (mins >= 11 * 60 && mins <= 20 * 60 + 30); // Evening: 11:00 AM – 8:30 PM
-}
-
-// Checks whether action buttons should be shown
-function isActionVisible(trip) {
-
-  // Hide buttons if trip is completed, cancelled, or already on trip
-  if (['completed', 'cancelled', 'on_trip'].includes(trip.status))
-    return false;
-
-  // Otherwise, check the time window
-  return isTripInActiveWindow(trip);
-}
-
 // Finds the status of a trip using its date and direction
 function getTripStatus(trips, isoDate, direction) {
   const t = trips.find(t => t.date === isoDate && t.direction === direction);
@@ -159,13 +117,16 @@ function friendlyDate(isoDate) {
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
+// Mounted only while open: closed modals used to stay in the DOM (opacity 0), so
+// their autoFocus inputs grabbed focus on page load and stayed tabbable.
 function Modal({ open, onClose, title, children, footer }) {
+  if (!open) return null;
   return (
-    <div className={`modal-overlay ${open ? 'open' : ''}`}>
-      <div className="modal">
+    <div className="modal-overlay open">
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <div className="modal-title">{title}</div>
-          <button className="modal-close" onClick={onClose}>&#x2715;</button>
+          <button className="modal-close" onClick={onClose} aria-label="Close">&#x2715;</button>
         </div>
         {children}
         {footer && <div className="modal-footer">{footer}</div>}
@@ -180,7 +141,8 @@ export default function Trips() {
 
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isWeekend, setIsWeekend] = useState(false);
+  // Seeded from the IST weekday so the subtitle doesn't flip once the server answers.
+  const [isWeekend, setIsWeekend] = useState(() => [0, 6].includes(nowIST().getUTCDay()));
 
   // Mark Late modal
   const [lateModal, setLateModal] = useState(false);
@@ -395,17 +357,9 @@ export default function Trips() {
     finally { setSubmitting(false); }
   }
 
-  // ── Loading ───────────────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <div className="loading-center">
-        <div className="spinner"></div>
-        <p>Loading trips…</p>
-      </div>
-    );
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────
+  // The header renders immediately; only the table waits for the API, so the
+  // page paints its main content without waiting on two sequential requests.
   return (
     <div>
 
@@ -420,7 +374,7 @@ export default function Trips() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-danger btn-sm" onClick={() => {
+          <button className="btn btn-danger btn-sm" disabled={loading} onClick={() => {
             const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
             setPreCancelModal(true);
             setPcMode('single');
@@ -434,10 +388,10 @@ export default function Trips() {
             Pre-Cancel
           </button>
           <button className="btn btn-ghost btn-sm" onClick={openRevokeRange}
-            disabled={!trips.some(t => t.status === 'cancelled')}>
+            disabled={loading || !trips.some(t => t.status === 'cancelled')}>
             Revoke Range
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => {
+          <button className="btn btn-ghost btn-sm" disabled={loading} onClick={() => {
             const today = todayIST();
             const morningPassed = isTimeWindowPassed(today, 'forward');
             setSpecialModal(true);
@@ -453,6 +407,12 @@ export default function Trips() {
       {/* Trips table */}
       <div className="card">
         <div className="card-title">Trip Log — Upcoming Scheduled Trips & Recent History</div>
+        {loading ? (
+          <div className="loading-center" style={{ height: '240px' }}>
+            <div className="spinner"></div>
+            <p>Loading trips…</p>
+          </div>
+        ) : (
         <div className="table-wrap">
           <table>
             <thead>
@@ -521,6 +481,7 @@ export default function Trips() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
 
@@ -537,13 +498,13 @@ export default function Trips() {
           Users will receive a push notification about the delay.
         </p>
         <div className="form-group">
-          <label className="form-label">Delay in minutes</label>
-          <input type="number" className="form-input" placeholder="e.g. 15" min="1" max="120"
+          <label className="form-label" htmlFor="late-minutes">Delay in minutes</label>
+          <input id="late-minutes" type="number" className="form-input" placeholder="e.g. 15" min="1" max="120"
             value={lateMinutes} onChange={e => setLateMinutes(e.target.value)} autoFocus />
         </div>
         <div className="form-group">
-          <label className="form-label">Reason (optional)</label>
-          <input type="text" className="form-input" placeholder="e.g. Heavy traffic at Pattom junction"
+          <label className="form-label" htmlFor="late-reason">Reason (optional)</label>
+          <input id="late-reason" type="text" className="form-input" placeholder="e.g. Heavy traffic at Pattom junction"
             value={lateReason} onChange={e => setLateReason(e.target.value)} />
         </div>
       </Modal>
@@ -570,8 +531,8 @@ export default function Trips() {
               All users will be notified with the reason below.
             </p>
             <div className="form-group">
-              <label className="form-label">Reason for cancellation</label>
-              <textarea className="form-textarea" placeholder="e.g. Vehicle breakdown, driver unavailable…"
+              <label className="form-label" htmlFor="cancel-reason">Reason for cancellation</label>
+              <textarea id="cancel-reason" className="form-textarea" placeholder="e.g. Vehicle breakdown, driver unavailable…"
                 value={cancelReason} onChange={e => setCancelReason(e.target.value)} />
             </div>
           </Modal>
@@ -591,8 +552,8 @@ export default function Trips() {
           Describe the stop change — all users will receive this as a push notification.
         </p>
         <div className="form-group">
-          <label className="form-label">Stop change message</label>
-          <textarea className="form-textarea"
+          <label className="form-label" htmlFor="stop-change-message">Stop change message</label>
+          <textarea id="stop-change-message" className="form-textarea"
             placeholder="e.g. Kesavadasapuram stop temporarily shifted 200m north due to road works"
             value={stopMessage} onChange={e => setStopMessage(e.target.value)} autoFocus />
         </div>
@@ -626,8 +587,8 @@ export default function Trips() {
               If a trip already exists or its scheduled time window has passed, it cannot be created.
             </p>
             <div className="form-group">
-              <label className="form-label">Date</label>
-              <input type="date" className="form-input" value={tripDate}
+              <label className="form-label" htmlFor="special-date">Date</label>
+              <input id="special-date" type="date" className="form-input" value={tripDate}
                 min={todayIST()}
                 onChange={e => {
                   const newDate = e.target.value;
@@ -638,8 +599,8 @@ export default function Trips() {
                 }} />
             </div>
             <div className="form-group">
-              <label className="form-label">Direction</label>
-              <select className="form-select" value={direction} onChange={e => setDirection(e.target.value)}>
+              <label className="form-label" htmlFor="special-direction">Direction</label>
+              <select id="special-direction" className="form-select" value={direction} onChange={e => setDirection(e.target.value)}>
                 <option value="forward" disabled={forwardDisabled}>
                   Morning — Central Poly to DUK
                   {forwardExists
@@ -723,22 +684,22 @@ export default function Trips() {
 
         {pcMode === 'single' ? (
           <div className="form-group">
-            <label className="form-label">Date</label>
-            <input type="date" className="form-input" value={pcDate}
+            <label className="form-label" htmlFor="pc-date">Date</label>
+            <input id="pc-date" type="date" className="form-input" value={pcDate}
               min={new Date(Date.now() + 86400000).toISOString().split('T')[0]}
               onChange={e => setPcDate(e.target.value)} />
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div className="form-group">
-              <label className="form-label">From</label>
-              <input type="date" className="form-input" value={pcDateFrom}
+              <label className="form-label" htmlFor="pc-date-from">From</label>
+              <input id="pc-date-from" type="date" className="form-input" value={pcDateFrom}
                 min={new Date(Date.now() + 86400000).toISOString().split('T')[0]}
                 onChange={e => setPcDateFrom(e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">To</label>
-              <input type="date" className="form-input" value={pcDateTo}
+              <label className="form-label" htmlFor="pc-date-to">To</label>
+              <input id="pc-date-to" type="date" className="form-input" value={pcDateTo}
                 min={pcDateFrom || new Date(Date.now() + 86400000).toISOString().split('T')[0]}
                 onChange={e => setPcDateTo(e.target.value)} />
             </div>
@@ -746,8 +707,8 @@ export default function Trips() {
         )}
 
         <div className="form-group">
-          <label className="form-label">Direction</label>
-          <select className="form-select" value={pcDirection} onChange={e => setPcDirection(e.target.value)}>
+          <label className="form-label" htmlFor="pc-direction">Direction</label>
+          <select id="pc-direction" className="form-select" value={pcDirection} onChange={e => setPcDirection(e.target.value)}>
             <option value="forward">Morning — Central Poly to DUK</option>
             <option value="reverse">Evening — DUK to Central Poly</option>
           </select>
@@ -763,8 +724,8 @@ export default function Trips() {
           </div>
         )}
         <div className="form-group">
-          <label className="form-label">Reason (optional)</label>
-          <input type="text" className="form-input" placeholder="e.g. Public holiday, driver on leave…"
+          <label className="form-label" htmlFor="pc-reason">Reason (optional)</label>
+          <input id="pc-reason" type="text" className="form-input" placeholder="e.g. Public holiday, driver on leave…"
             value={pcReason} onChange={e => setPcReason(e.target.value)} />
         </div>
       </Modal>
@@ -783,8 +744,8 @@ export default function Trips() {
           letting all users know the service is back on.
         </p>
         <div className="form-group">
-          <label className="form-label">Reason / message to users (optional)</label>
-          <input type="text" className="form-input"
+          <label className="form-label" htmlFor="revoke-reason">Reason / message to users (optional)</label>
+          <input id="revoke-reason" type="text" className="form-input"
             placeholder="e.g. Service back on as planned"
             value={revokeReason} onChange={e => setRevokeReason(e.target.value)} autoFocus />
         </div>
@@ -816,14 +777,14 @@ export default function Trips() {
           return (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
               <div className="form-group">
-                <label className="form-label">Filter From</label>
-                <input type="date" className="form-input" value={revokeRangeDateFrom}
+                <label className="form-label" htmlFor="revoke-range-from">Filter From</label>
+                <input id="revoke-range-from" type="date" className="form-input" value={revokeRangeDateFrom}
                   min={minCancelDate} max={maxCancelDate}
                   onChange={e => { setRevokeRangeDateFrom(e.target.value); setRevokeRangeTripIds([]); }} />
               </div>
               <div className="form-group">
-                <label className="form-label">Filter To</label>
-                <input type="date" className="form-input" value={revokeRangeDateTo}
+                <label className="form-label" htmlFor="revoke-range-to">Filter To</label>
+                <input id="revoke-range-to" type="date" className="form-input" value={revokeRangeDateTo}
                   min={revokeRangeDateFrom || minCancelDate} max={maxCancelDate}
                   onChange={e => { setRevokeRangeDateTo(e.target.value); setRevokeRangeTripIds([]); }} />
               </div>
@@ -876,8 +837,8 @@ export default function Trips() {
           ))}
         </div>
         <div className="form-group" style={{ marginTop: '12px' }}>
-          <label className="form-label">Reason / message to users (optional)</label>
-          <input type="text" className="form-input"
+          <label className="form-label" htmlFor="revoke-range-reason">Reason / message to users (optional)</label>
+          <input id="revoke-range-reason" type="text" className="form-input"
             placeholder="e.g. Service reinstated — all systems normal"
             value={revokeRangeReason} onChange={e => setRevokeRangeReason(e.target.value)} />
         </div>

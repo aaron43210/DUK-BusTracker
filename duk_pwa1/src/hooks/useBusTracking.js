@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context';
 import {
-  getTripState, getLatestGps, getRouteHistory, getStops, getEta, getAllEtas, getRouteGeometry, getWsBusUrl
+  getTripState, getLatestGps, getRouteHistory, getStops, getEta, getAllEtas, getRouteGeometry, getWsBusUrl, getWsBusProtocols, refreshSession
 } from '../api';
-import { getUser } from '../storage';
+import { getUser, getRefreshToken } from '../storage';
+import { haversineDistKm } from '../timetable';
 
 // Polling intervals (milliseconds).
 // Heavy poll: runs on mount and when the bus is NOT live.
@@ -14,17 +15,34 @@ const LIGHT_POLL_MS = 30000;  // 30 s  — reduced when WS is providing GPS data
 
 // Module-level route geometry cache: fetched once per app session.
 // Stored outside React state so it survives component unmounts.
-let _cachedRouteGeometry = null;
+let _cachedRouteGeometry = {};
+
+function getProximityLocationName(lon, lat, defaultName, stops) {
+  if (!stops || stops.length === 0) return defaultName;
+  let closestStop = null;
+  let minDist = Infinity;
+  for (const stop of stops) {
+    const dist = haversineDistKm(lon, lat, Number(stop.lon), Number(stop.lat));
+    if (dist < minDist) {
+      minDist = dist;
+      closestStop = stop;
+    }
+  }
+  return (minDist <= 0.2 && closestStop) ? closestStop.name : defaultName;
+}
 
 export default function useBusTracking() {
   const { state, dispatch } = useAppContext();
-  const [nextStop, setNextStop] = useState(null);
-  const [nextTripTime, setNextTripTime] = useState(null);
+
   const [locationName, setLocationName] = useState(null);
   const wsRef = useRef(null);
   const intervalRef = useRef(null);
+  // Counts consecutive expired-token (4003) refresh attempts so a refresh↔reject
+  // loop can't hammer the server; reset once a connection opens or closes cleanly.
+  const wsRefreshAttemptsRef = useRef(0);
   const isFetchingRef = useRef(false);
   const isLiveRef = useRef(false); // tracks WS liveness without triggering re-renders
+  const stopsRef = useRef([]);
 
   // Core API Polling
   const fetchAll = async () => {
@@ -35,7 +53,7 @@ export default function useBusTracking() {
       let trip = null;
       try {
         trip = await getTripState();
-      } catch (_) {}
+      } catch (_) { }
 
       const [busRes, histRes, stopsRes] = await Promise.allSettled([
         getLatestGps(),
@@ -55,21 +73,41 @@ export default function useBusTracking() {
         updates.isLive = true;
       } else if (bus) {
         updates.busPosition = bus;
+        // Only override isLive→false from the HTTP poll when the WebSocket is
+        // genuinely disconnected. If the WS is up, the backend's is_live flag
+        // can lag behind the real-time stream and would incorrectly snap the
+        // marker back to an older GPS position on every poll cycle.
+        if (!isLiveRef.current) {
+          updates.isLive = false;
+        }
       }
 
-      if (bus?.location_name) {
-        setLocationName(bus.location_name);
+      if (fetchedStops.length > 0) {
+        updates.stops = fetchedStops;
+        stopsRef.current = fetchedStops;
+      }
+
+      let newLocationName = bus?.location_name || null;
+      if (bus?.lat && bus?.lon && fetchedStops.length > 0) {
+        newLocationName = getProximityLocationName(bus.lon, bus.lat, newLocationName, fetchedStops);
+      }
+      if (newLocationName) {
+        setLocationName(newLocationName);
       }
 
       updates.history = history;
 
-      if (fetchedStops.length > 0) {
-        updates.stops = fetchedStops;
-      }
-
       // Dynamic ETA Target
       const user = getUser();
-      if (bus?.is_live) {
+      // Only fetch ETAs when we have a genuinely LIVE bus on a running trip.
+      // 'connecting' means the window is open but the bus has not reported live
+      // GPS yet — computing ETAs off the stale last-known position produced
+      // fake "delayed/early" times before the bus had departed.
+      const isActiveTrip = trip
+        && ['active', 'on_trip', 'late'].includes(trip.status)
+        && bus?.is_live === true;
+
+      if (bus && isActiveTrip) {
         const isEvening = trip?.trip?.toLowerCase()?.includes('evening');
         const primaryTargetId = isEvening ? user?.destination_stop_id : user?.boarding_stop_id;
 
@@ -93,13 +131,15 @@ export default function useBusTracking() {
 
         if (!finalEtaRes || finalEtaRes.status === 'passed' || finalEtaRes.status === 'deviated') {
           if (fetchedStops && fetchedStops.length > 0) {
-            const orderedStops = isEvening ? [...fetchedStops].reverse() : fetchedStops;
+            const orderedStops = isEvening 
+              ? [...fetchedStops].sort((a, b) => (a.evening_order_index || 0) - (b.evening_order_index || 0))
+              : [...fetchedStops].sort((a, b) => (a.morning_order_index || 0) - (b.morning_order_index || 0));
             const finalStop = orderedStops[orderedStops.length - 1];
             if (finalStop && finalStop.id !== primaryTargetId) {
               try {
                 finalEtaRes = await getEta(finalStop.id);
                 usedTargetId = finalStop.id;
-              } catch (_) {}
+              } catch (_) { }
             }
           }
         }
@@ -112,20 +152,26 @@ export default function useBusTracking() {
         updates.mlEtas = null;
       }
 
-      // Route Geometry — fetch once per session, cache at module level.
-      // Avoids re-fetching the full route GeoJSON on every poll cycle.
-      if (!state.plannedCoords?.length || state.plannedCoords.length < 100) {
-        if (_cachedRouteGeometry?.length) {
-          updates.plannedCoords = _cachedRouteGeometry;
-        } else {
+      // Route Geometry — fetch once per trip, cache at module level.
+      const currentTripId = trip?.trip_id;
+      if (currentTripId) {
+        if (!_cachedRouteGeometry[currentTripId]) {
           try {
-            const geo = await getRouteGeometry();
+            const geo = await getRouteGeometry(currentTripId, trip.direction);
             if (geo?.coordinates?.length) {
-              _cachedRouteGeometry = geo.coordinates;
-              updates.plannedCoords = _cachedRouteGeometry;
+              _cachedRouteGeometry[currentTripId] = geo.coordinates;
+              updates.plannedCoords = geo.coordinates;
+              // Notify BusMapView's TrailManager so it can snap-to-route instantly
+              window.dispatchEvent(new CustomEvent('planned-route-ready', { detail: geo.coordinates }));
             }
-          } catch (_) {}
+          } catch (_) { }
+        } else if (state.plannedCoords !== _cachedRouteGeometry[currentTripId]) {
+          updates.plannedCoords = _cachedRouteGeometry[currentTripId];
+          // Re-emit in case BusMapView remounted and lost the previous event
+          window.dispatchEvent(new CustomEvent('planned-route-ready', { detail: _cachedRouteGeometry[currentTripId] }));
         }
+      } else {
+        updates.plannedCoords = [];
       }
 
       dispatch({ type: 'BATCH_UPDATE', payload: updates });
@@ -154,10 +200,18 @@ export default function useBusTracking() {
     let reconnectTimeout = null;
 
     const connectWs = () => {
-      const ws = new WebSocket(getWsBusUrl());
+      // Carry the JWT in the Sec-WebSocket-Protocol subprotocol (["bearer","<jwt>"])
+      // rather than the URL query string, keeping it out of logs/history. The
+      // server authenticates the handshake from it (or a session cookie).
+      const protocols = getWsBusProtocols();
+      const ws = protocols
+        ? new WebSocket(getWsBusUrl(), protocols)
+        : new WebSocket(getWsBusUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {
+        wsRefreshAttemptsRef.current = 0;  // healthy connection — clear refresh guard
+
         // Switch to light polling — WS now handles GPS updates
         if (isMounted && !isLiveRef.current) {
           isLiveRef.current = true;
@@ -170,8 +224,12 @@ export default function useBusTracking() {
         try {
           const msg = JSON.parse(event.data);
           if (Number.isFinite(msg.lat) && Number.isFinite(msg.lon)) {
-            if (msg.location_name) {
-              setLocationName(msg.location_name);
+            let newLocationName = msg.location_name || null;
+            if (stopsRef.current && stopsRef.current.length > 0) {
+              newLocationName = getProximityLocationName(msg.lon, msg.lat, newLocationName, stopsRef.current);
+            }
+            if (newLocationName) {
+              setLocationName(newLocationName);
             }
             // Update context state
             dispatch({
@@ -181,15 +239,81 @@ export default function useBusTracking() {
                 isLive: true
               }
             });
-            
+
             // Dispatch native event for Animator if it exists
             window.dispatchEvent(new CustomEvent('live-gps-update', { detail: msg }));
           }
-        } catch (e) {}
+        } catch (e) { }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        if (event.code === 4001) {
+          // 4001: the token's JTI is revoked (explicit logout / server-side
+          // revocation). This is a genuine "you are no longer authorized" — send
+          // the user to login and stop reconnecting.
+          window.dispatchEvent(new CustomEvent('api:unauthorized'));
+          return;
+        }
+
+        if (event.code === 4008) {
+          // 4008: server-side infrastructure error (Redis unavailable). This is
+          // NOT a session revocation — reconnect normally after a short backoff.
+          if (isMounted) {
+            if (isLiveRef.current) { isLiveRef.current = false; _rescheduleInterval(false); }
+            reconnectTimeout = setTimeout(connectWs, 3000);
+          }
+          return;
+        }
+
+        if (event.code === 4003) {
+          // 4003: the server could not decode the token — almost always just an
+          // EXPIRED access token (JWT past its exp), NOT a revoked session. The
+          // HTTP layer silently refreshes in this case; the WS must do the same so
+          // a user with a valid 365-day refresh token is never bounced to login.
+          // Only if the refresh itself fails (refresh token also rejected) do we
+          // treat it as unauthorized.
+          if (!isMounted) return;
+          if (isLiveRef.current) {
+            isLiveRef.current = false;
+            _rescheduleInterval(false);
+          }
+          if (wsRefreshAttemptsRef.current >= 3) {
+            // Guard against a tight refresh↔4003 loop (e.g. clock skew).
+            window.dispatchEvent(new CustomEvent('api:unauthorized'));
+            return;
+          }
+          wsRefreshAttemptsRef.current += 1;
+          refreshSession()
+            .then((ok) => {
+              if (!isMounted) return;
+              if (ok) {
+                // New access token is in storage — getWsBusUrl() will pick it up.
+                reconnectTimeout = setTimeout(connectWs, 500);
+              } else {
+                // refreshSession returns false for BOTH auth failures AND transient
+                // network errors. Only logout if we've exhausted retries AND there
+                // is no refresh token left (meaning _silentRefresh cleared it on
+                // an explicit 401/403).
+                if (!getRefreshToken()) {
+                  // Token was explicitly cleared — real auth failure
+                  window.dispatchEvent(new CustomEvent('api:unauthorized'));
+                } else {
+                  // Transient — still have refresh token, back off and retry WS
+                  reconnectTimeout = setTimeout(connectWs, 3000);
+                }
+              }
+            })
+            .catch(() => {
+              // Unexpected error — retry WS connection, don't logout
+              if (isMounted) reconnectTimeout = setTimeout(connectWs, 3000);
+            });
+          return;
+        }
+
         if (isMounted) {
+          // Normal disconnect (network blip, server restart) — a healthy reconnect
+          // succeeded at least once, so reset the refresh guard.
+          wsRefreshAttemptsRef.current = 0;
           // Drop back to heavy polling when WS disconnects
           if (isLiveRef.current) {
             isLiveRef.current = false;

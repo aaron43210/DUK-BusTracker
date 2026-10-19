@@ -8,9 +8,10 @@
   Inspired by tools like GitHub, Linear, and Notion admin panels.
 */
 
-/* ── Google Font ─────────────────────────────────────────────────────────────
-   Inter: designed specifically for screens — highly legible at small sizes.     */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+/* ── Font ────────────────────────────────────────────────────────────────────
+   Inter (variable) is self-hosted via @fontsource-variable/inter, imported in
+   main.jsx. A Google Fonts @import here was a render-blocking chain to two
+   third-party origins (~900 ms on mobile).                                       */
 
 /* ── Design tokens (CSS variables) ──────────────────────────────────────────
    Change a colour here and it updates everywhere. Much safer than finding
@@ -25,34 +26,42 @@
   /* alternate row / secondary surface                     */
 
   /* Brand blue — used for active nav, buttons, focus rings */
-  --accent: #52ae87;
-  /* classic blue (Tailwind blue-600)        */
+  --accent: #2f7d5b;
+  /* brand green — ≥4.5:1 with white text and on --accent-light (WCAG AA) */
   --accent-light: #eff6ff;
   /* pale blue background for badges          */
-  --accent-hover: #408a69;
+  --accent-hover: #26664a;
   /* darker blue on hover (blue-700)          */
 
   /* Status colours — restrained, professional                                    */
-  --danger: #110101;
+  --danger: #b91c1c;
   /* red — cancel / delete / error                         */
-  --warning: #d31e27;
+  --warning: #b45309;
   /* amber — late / caution                                 */
-  --success: #16a34a;
+  --success: #15803d;
   /* green — active / ok                                    */
-  --info: #0284c7;
+  --info: #0369a1;
   /* sky blue — scheduled / informational                   */
 
   /* Typography */
   --text: #111827;
   /* near-black — primary text                           */
-  --text-muted: #6b7280;
+  --text-muted: #5f6672;
   /* medium gray — labels, metadata                     */
-  --text-light: #9ca3af;
+  --text-light: #6b7280;
   /* light gray — placeholders, hints                    */
 
   /* Borders & structure */
   --border: #e5e7eb;
-  /* light gray border — card edges, table lines          */
+  /* soft gray — borders, dividers                      */
+
+  /* Aliases for missing tokens found in JSX */
+  --primary: var(--accent);
+  --text-main: var(--text);
+  --text-dark: #000000;
+  --bg-color: var(--surface);
+  --bg-subtle: #f3f4f6;
+  --bg-warn: #fffbeb;
   --border-md: #d1d5db;
   /* slightly stronger border — inputs, active states     */
 
@@ -80,7 +89,7 @@
 
 /* ── Base ────────────────────────────────────────────────────────────────────  */
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
   /* Inter first      */
   background: var(--bg);
   /* light gray outer background                        */
@@ -623,6 +632,16 @@ code {
 .modal-overlay.open {
   opacity: 1;
   pointer-events: all;
+  /* Modals mount only while open, so animate in rather than transition. */
+  animation: modal-fade-in 0.18s;
+}
+
+@keyframes modal-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes modal-rise {
+  from { transform: translateY(12px); }
 }
 
 .modal {
@@ -647,6 +666,7 @@ code {
 
 .modal-overlay.open .modal {
   transform: translateY(0);
+  animation: modal-rise 0.18s;
 }
 
 .modal-header {
@@ -1036,6 +1056,22 @@ code {
   }
 }
 
+/* Touch devices: 16px inputs avoid iOS focus-zoom; --kb set by keyboardInsets.js. */
+:root { --kb: 0px; }
+input, textarea, select { font-size: 16px; }
+
+/* ── Small phones ─────────────────────────────────────────────────────────── */
+@media (max-width: 560px) {
+  .content { padding: 16px 12px; }
+  /* Single-column stat cards + any 2/3-up grids so nothing is squeezed. */
+  .stats-row,
+  .col-2,
+  .col-3 { grid-template-columns: 1fr; }
+  /* Keep the keyboard from covering modal forms. */
+  .modal-overlay { align-items: flex-start; padding-bottom: calc(24px + var(--kb)); overflow-y: auto; }
+  .table-wrap { -webkit-overflow-scrolling: touch; }
+}
+
 /* ── Maintenance Page ─────────────────────────────────────────────────────── */
 .maintenance-container {
   display: flex;
@@ -1126,7 +1162,7 @@ code {
   font-weight: 500;
 }
 
-.status-dot {
+.maintenance-status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;

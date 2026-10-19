@@ -10,6 +10,9 @@ export default defineConfig({
   // plugins: list of Vite plugins to activate
   // @vitejs/plugin-react handles JSX, Fast Refresh (hot reload), and React-specific transforms
   plugins: [react()],
+  
+  // base: tells Vite that the app will be served from /duk/admin2026/ rather than a subdirectory
+  base: process.env.VITE_ADMIN_BASE_PATH || '/duk/admin2026/',
 
   // server: dev server configuration (only used during `npm run dev`)
   server: {
@@ -23,7 +26,7 @@ export default defineConfig({
 
       // Any request that starts with /api will be forwarded to the FastAPI backend
       '/api': {
-        target: 'http://127.0.0.1:80',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         ws: true,
       },

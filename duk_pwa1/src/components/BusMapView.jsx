@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import GPSAnimator from '../utils/gpsAnimator';
-import TrailManager from '../utils/trailManager';
+import TrailManager, { SNAP_THRESHOLD_M } from '../utils/trailManager';
 import { getRouteSegment } from '../api';
 
 const MAP_STYLE     = 'https://tiles.openfreemap.org/styles/liberty';
@@ -17,22 +17,38 @@ export default function BusMapView({
   defaultBearing = 0,
   busCoord      = null,
   isLive        = false,
+  isActiveTrip  = false,
+  autoCenter    = false,
   headingStatus = null,
   stops         = [],
   plannedCoords = [],
+  routeHistoryCoords = [],
   onStopClick   = null,
   onMapLoad     = null,
+  onAutoCenterChange = null, // notify parent when a user gesture turns off follow
   style         = {},
   className     = '',
 }) {
   const containerRef  = useRef(null);
   const mapRef        = useRef(null);
   const busMarkerRef  = useRef(null);
+  const markerLiveRef = useRef(null); // current icon state on the marker (avoids per-frame innerHTML rewrites)
   const stopsLayerRef = useRef(false);
   const mapReadyRef   = useRef(false);
 
-  const animatorRef   = useRef(null);
+  const animatorRef     = useRef(null);
   const trailManagerRef = useRef(null);
+  const isActiveTripRef = useRef(false); // ref so animator callbacks always read the latest value
+  // Refs so the (mount-time) animator callback always sees the latest props: while
+  // live and following, we recenter the map on the *animated* position each frame
+  // so the map glides with the marker instead of stepping to each raw GPS point.
+  const isLiveRef       = useRef(false);
+  const autoCenterRef   = useRef(false);
+  // True only while the user is actively dragging/zooming, so the per-frame
+  // follow never fights their gesture (the "map is stuck / not movable" bug).
+  const userInteractingRef = useRef(false);
+  const onAutoCenterChangeRef = useRef(onAutoCenterChange);
+  useEffect(() => { onAutoCenterChangeRef.current = onAutoCenterChange; }, [onAutoCenterChange]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -56,6 +72,29 @@ export default function BusMapView({
 
     mapRef.current = map;
     trailManagerRef.current = new TrailManager();
+
+    // A user-initiated pan/zoom/rotate carries an `originalEvent` (programmatic
+    // moves like our follow-setCenter do not). On such a gesture we release
+    // auto-follow so the map stays where the user put it, and tell the parent so
+    // the crosshair button reflects the change. We also suppress the per-frame
+    // follow for the duration of the gesture.
+    const onUserGestureStart = (e) => {
+      if (!e || !e.originalEvent) return;
+      userInteractingRef.current = true;
+      if (autoCenterRef.current) {
+        autoCenterRef.current = false;
+        if (onAutoCenterChangeRef.current) onAutoCenterChangeRef.current(false);
+      }
+    };
+    const onUserGestureEnd = (e) => {
+      if (e && e.originalEvent) userInteractingRef.current = false;
+    };
+    map.on('dragstart', onUserGestureStart);
+    map.on('zoomstart', onUserGestureStart);
+    map.on('rotatestart', onUserGestureStart);
+    map.on('dragend', onUserGestureEnd);
+    map.on('zoomend', onUserGestureEnd);
+    map.on('rotateend', onUserGestureEnd);
 
     map.on('load', () => {
       mapReadyRef.current = true;
@@ -108,41 +147,93 @@ export default function BusMapView({
         });
       }
 
-      updateMapData(map, plannedCoords, stops);
+      updateMapData(map, plannedCoords, stops, routeHistoryCoords);
     });
 
-    // Initialize Animator
+    // Initialize Animator with smart snap-to-route segment fetcher.
+    // If the bus is within SNAP_THRESHOLD_M of the planned route → instant slice.
+    // If deviated or unscheduled → call OSRM for the actual road shape.
     animatorRef.current = new GPSAnimator({
       onPositionUpdate: (point, drawnPath) => {
         updateBusMarker(point, true);
-        if (trailManagerRef.current && drawnPath) {
+        // Follow the animated point (smooth) rather than the raw GPS ping — but
+        // never while the user is actively panning/zooming the map.
+        if (
+          autoCenterRef.current &&
+          isLiveRef.current &&
+          !userInteractingRef.current &&
+          mapRef.current
+        ) {
+          mapRef.current.setCenter(point);
+        }
+        if (trailManagerRef.current && drawnPath && isActiveTripRef.current) {
           trailManagerRef.current.drawLive(drawnPath);
         }
       },
       onSegmentFinished: (path) => {
-        if (trailManagerRef.current) {
+        if (trailManagerRef.current && isActiveTripRef.current) {
           trailManagerRef.current.commitSegment(path);
         }
       },
       segmentFetcher: async (lat1, lon1, lat2, lon2) => {
-        const seg = await getRouteSegment(lat1, lon1, lat2, lon2);
-        if (seg && seg.coordinates) {
-          return seg.coordinates;
+        const trail = trailManagerRef.current;
+        const hasPlanned = trail && trail._plannedCoords && trail._plannedCoords.length > 0;
+
+        if (hasPlanned) {
+          // Try snapping both endpoints to the planned route
+          const snap1 = trail.findNearestOnRoute(lon1, lat1);
+          const snap2 = trail.findNearestOnRoute(lon2, lat2);
+
+          if (
+            snap1 && snap2 &&
+            snap1.distM <= SNAP_THRESHOLD_M &&
+            snap2.distM <= SNAP_THRESHOLD_M
+          ) {
+            // Bus is on the known route — return planned route slice instantly (no OSRM).
+            // Only treat as genuinely backward if the snap index clearly regressed by
+            // >= 3 waypoints — smaller diffs are GPS jitter at a stop and reversing
+            // them is what makes the marker briefly "back up" along the route.
+            const idxDiff = snap1.idx - snap2.idx;
+            const isBackward = idxDiff >= 3;
+            const from = Math.min(snap1.idx, snap2.idx);
+            const to   = Math.max(snap1.idx, snap2.idx);
+            let slice = trail._plannedCoords.slice(from, to + 1);
+            
+            if (isBackward) {
+              slice.reverse();
+            }
+            
+            if (slice.length >= 2) return slice;
+          }
+          // Deviated beyond threshold — fall through to OSRM
         }
-        return [];
-      }
+
+        // Unscheduled trip or deviated > 300m: use OSRM for accurate road shape
+        const seg = await getRouteSegment(lat1, lon1, lat2, lon2);
+        return seg?.coordinates || [];
+      },
     });
 
     const onLiveGps = (e) => {
       const msg = e.detail;
       if (animatorRef.current && msg.lat && msg.lon) {
-        animatorRef.current.pushPoint(msg.lat, msg.lon, msg.server_time);
+        animatorRef.current.pushPoint(msg.lat, msg.lon, msg.server_time, msg.osrm_path);
       }
     };
     window.addEventListener('live-gps-update', onLiveGps);
 
+    // When useBusTracking fetches planned coords, wire them into TrailManager
+    // so the smart segmentFetcher can snap to them.
+    const onPlannedRoute = (e) => {
+      if (trailManagerRef.current) {
+        trailManagerRef.current.setPlannedRoute(e.detail);
+      }
+    };
+    window.addEventListener('planned-route-ready', onPlannedRoute);
+
     return () => {
       window.removeEventListener('live-gps-update', onLiveGps);
+      window.removeEventListener('planned-route-ready', onPlannedRoute);
       mapReadyRef.current = false;
       stopsLayerRef.current = false;
       if (busMarkerRef.current) {
@@ -156,11 +247,18 @@ export default function BusMapView({
     };
   }, []);
 
-  const updateMapData = (map, planned, stopsArr) => {
+  const updateMapData = (map, planned, stopsArr, historyCoords) => {
     if (!map || !mapReadyRef.current) return;
     const plannedSrc = map.getSource('planned-route');
-    if (plannedSrc) {
-      plannedSrc.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: planned } });
+    if (plannedSrc && planned && planned.length > 0) {
+      const isMulti = Array.isArray(planned[0]) && Array.isArray(planned[0][0]);
+      plannedSrc.setData({ 
+        type: 'Feature', 
+        geometry: { 
+          type: isMulti ? 'MultiLineString' : 'LineString', 
+          coordinates: planned 
+        } 
+      });
     }
     const stopsSrc = map.getSource('stops');
     if (stopsSrc) {
@@ -172,34 +270,51 @@ export default function BusMapView({
         })),
       });
     }
+
+    if (historyCoords && historyCoords.length > 0 && trailManagerRef.current) {
+      // Guard: only reseed from history if it has at least as many points as the
+      // current live trail. The route_history API is cached 30 s in Redis, so a
+      // poll response can arrive slightly behind the live segments commitSegment()
+      // just appended — blindly calling setHistory() would shrink the visible trail.
+      // When historyCoords is longer (or equal), it's safe to reseed because the
+      // DB has caught up and the history is more authoritative.
+      const currentLen = trailManagerRef.current.trailCoords.length;
+      if (historyCoords.length >= currentLen) {
+        trailManagerRef.current.setHistory(historyCoords);
+      }
+    }
   };
 
   useEffect(() => {
-    updateMapData(mapRef.current, plannedCoords, stops);
-  }, [plannedCoords, stops]);
+    updateMapData(mapRef.current, plannedCoords, stops, routeHistoryCoords);
+  }, [plannedCoords, stops, routeHistoryCoords]);
+
+  // Rewrites the marker icon HTML only when the live/offline state actually changes.
+  // During animation this is called ~60×/s with the same `live` value, so guarding
+  // the innerHTML write keeps the DOM identical while avoiding needless reflows.
+  const setMarkerIcon = (live) => {
+    if (!busMarkerRef.current || markerLiveRef.current === live) return;
+    markerLiveRef.current = live;
+    const imgSrc = live ? `${import.meta.env.BASE_URL}bus_live.webp` : `${import.meta.env.BASE_URL}bus_offline.webp`;
+    busMarkerRef.current.getElement().innerHTML = `
+      <div class="marker-wrapper" style="position: relative; display: flex; align-items: center; justify-content: center; width: 48px; height: 48px;">
+        <img src="${imgSrc}" style="width: 32px; height: 32px; object-fit: contain; z-index: 2;" alt="Bus" />
+      </div>
+    `;
+  };
 
   const updateBusMarker = (coord, live = false) => {
     const map = mapRef.current;
     if (!map) return;
-    const iconSrc = live ? '/bus_green.png' : '/bus_gray.png';
 
     if (!busMarkerRef.current) {
       const el = document.createElement('div');
       el.className = 'bus-marker-wrapper';
-
-      const container = document.createElement('div');
-      container.className = 'bus-marker-container';
-      const img = document.createElement('img');
-      img.src = iconSrc;
-      img.className = 'bus-marker-img';
-      img.alt = 'Bus';
-      container.appendChild(img);
-      el.appendChild(container);
-      busMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(coord).addTo(map);
+      busMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat(coord).addTo(map);
+      markerLiveRef.current = null;
+      setMarkerIcon(live);
     } else {
-      const el = busMarkerRef.current.getElement();
-      const img = el?.querySelector('.bus-marker-img');
-      if (img && img.getAttribute('src') !== iconSrc) img.src = iconSrc;
+      setMarkerIcon(live);
       busMarkerRef.current.setLngLat(coord);
     }
   };
@@ -208,11 +323,42 @@ export default function BusMapView({
     if (!busCoord) {
       busMarkerRef.current?.remove();
       busMarkerRef.current = null;
+      markerLiveRef.current = null;
       return;
     }
-    // Only set it manually if animator hasn't overridden it yet, to initialize
-    updateBusMarker(busCoord, isLive);
+    // While live, GPSAnimator owns marker motion (smooth rAF interpolation via
+    // onPositionUpdate). Snapping to the raw busCoord here would fight the animator
+    // and teleport the marker on every ping.
+    //
+    // Extra guard: if the animator already has a tracked position (currentPos != null)
+    // we must NEVER override it with the raw GPS coord — even if isLive hasn't
+    // propagated to true yet in this render cycle (React batching edge case). This
+    // prevents the "jump forward then snap backward" glitch on every WS/poll cycle.
+    const animatorHasPosition = animatorRef.current?.currentPos != null;
+    if (!busMarkerRef.current) {
+      // First appearance — place marker at initial position
+      updateBusMarker(busCoord, isLive);
+    } else if (!isLive && !animatorHasPosition) {
+      // Genuinely offline and no animator running — direct position update
+      updateBusMarker(busCoord, isLive);
+    } else {
+      // Live OR animator already has a position — only update the icon
+      setMarkerIcon(isLive);
+    }
   }, [busCoord, isLive, headingStatus]);
+
+  // Sync isActiveTrip prop into a ref so animator callbacks always read the latest value
+  useEffect(() => {
+    isActiveTripRef.current = isActiveTrip;
+    // When trip goes inactive, clear any live trail segments that were drawn
+    if (!isActiveTrip && trailManagerRef.current) {
+      trailManagerRef.current.clear();
+    }
+  }, [isActiveTrip]);
+
+  // Keep the live/follow refs current for the mount-time animator callback.
+  useEffect(() => { isLiveRef.current = isLive; }, [isLive]);
+  useEffect(() => { autoCenterRef.current = autoCenter; }, [autoCenter]);
 
   useEffect(() => {
     const map = mapRef.current;

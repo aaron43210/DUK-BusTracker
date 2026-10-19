@@ -1,6 +1,5 @@
 # ─────────────────────────────────────────────────
 # Git ignore for DUK Bus Tracker (duk_micro)
-# ─────────────────────────────────────────────────
 
 # ── Secrets — NEVER commit these ──────────────────
 .env
@@ -10,7 +9,6 @@
 *.key
 *.p12
 google-services.json
-
 # ── Python build artifacts ─────────────────────────
 __pycache__/
 *.py[cod]
@@ -25,25 +23,26 @@ build/
 venv/
 .venv/
 env/
-
 # ── Dev scratch files ──────────────────────────────
 test_*.py
 check_*.py
 debug_*.py
 scratch/
-
 # ── OS artifacts ───────────────────────────────────
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
-
 # ── Logs ──────────────────────────────────────────
 *.log
 logs/
-
 # ── ML model artifacts (large, should use releases) ──
 *.pkl
 *.h5
 *.joblib
 models/
+# Real test modules live in tests/ and must be committed (CI runs them).
+!tests/test_*.py
+# Production database dumps contain user data (names, emails, device tokens).
+sql_scripts/schema.sql
+*.dump

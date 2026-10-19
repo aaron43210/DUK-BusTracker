@@ -8,6 +8,7 @@
  */
 import { initializeApp, getApps } from 'firebase/app';
 import { getMessaging, getToken, onMessage } from 'firebase/messaging';
+import { apiFetch } from './api';
 
 const firebaseConfig = {
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
@@ -29,18 +30,14 @@ function getMsg() {
 //  Save FCM token to backend 
 
 async function saveTokenToBackend(token) {
-  const jwt = localStorage.getItem('duk_jwt_token');
-  if (!jwt || !token) return;
-  const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+  if (!token) return;
   try {
-    await fetch(`${BASE}/api/v1/auth/device-token`, {
-      method:  'PUT',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${jwt}`,
-      },
+    // Use apiFetch so the JWT auto-refresh interceptor handles expired tokens.
+    await apiFetch('/api/v1/auth/device-token', {
+      method: 'PUT',
       body: JSON.stringify({ device_token: token, notifications_on: true }),
     });
+    console.info('[FCM] Device token saved to backend.');
   } catch (e) {
     console.warn('[FCM] Could not save device token:', e);
   }
@@ -49,13 +46,16 @@ async function saveTokenToBackend(token) {
 //  Request permission + register token 
 
 /**
- * Called immediately after a successful OTP login.
+ * Called immediately after a successful login.
  * Asks the OS for notification permission, generates a FCM token, and
  * saves it to the backend.
  */
 export async function requestAndSaveFcmToken() {
   try {
-    if (!('Notification' in window)) return;
+    if (!('Notification' in window)) {
+      console.warn('[FCM] Notifications API not supported in this browser.');
+      return;
+    }
     
     // Vibrate before prompting to grab attention
     if (Notification.permission !== 'granted' && navigator.vibrate) {
@@ -67,16 +67,27 @@ export async function requestAndSaveFcmToken() {
       console.info('[FCM] Notification permission denied.');
       return;
     }
+
+    const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+    if (!vapidKey) {
+      console.error('[FCM] VITE_FIREBASE_VAPID_KEY is not set — token cannot be generated.');
+      return;
+    }
+
     const messaging = getMsg();
     const token = await getToken(messaging, {
-      vapidKey:           import.meta.env.VITE_FIREBASE_VAPID_KEY,
+      vapidKey,
       serviceWorkerRegistration: await navigator.serviceWorker.ready,
     });
-    if (token) {
-      localStorage.setItem('duk_fcm_token', token);
-      await saveTokenToBackend(token);
-      console.info('[FCM] Device token registered.');
+
+    if (!token) {
+      console.warn('[FCM] getToken() returned empty — check VAPID key and HTTPS setup.');
+      return;
     }
+
+    localStorage.setItem('duk_fcm_token', token);
+    await saveTokenToBackend(token);
+    console.info('[FCM] Device token registered successfully.');
   } catch (e) {
     console.warn('[FCM] requestAndSaveFcmToken failed:', e);
   }

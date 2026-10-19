@@ -63,8 +63,9 @@ export default function Broadcast() {
 
             {/* Title field */}
             <div className="form-group">
-              <label className="form-label">Title</label>
+              <label className="form-label" htmlFor="broadcast-title">Title</label>
               <input
+                id="broadcast-title"
                 type="text"
                 className="form-input"
                 placeholder="e.g. Bus Running Late"
@@ -80,8 +81,9 @@ export default function Broadcast() {
 
             {/* Body field */}
             <div className="form-group">
-              <label className="form-label">Message</label>
+              <label className="form-label" htmlFor="broadcast-body">Message</label>
               <textarea
+                id="broadcast-body"
                 className="form-textarea"
                 placeholder="e.g. The evening bus will depart 15 minutes late today."
                 value={body}

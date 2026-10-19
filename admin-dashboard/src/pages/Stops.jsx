@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import React, { useState, useEffect, useRef } from 'react';
-import { getAdminStops, createStop, updateStop, deleteStop, setStopRole } from '../api.js';
+import { getAdminStops, createStop, updateStop, deleteStop, setStopRole, refreshRouteGeometry, reorderStops } from '../api.js';
 import { useToast } from '../App.jsx';
 
 // ---------------------------------------------------------------------------
@@ -49,14 +49,16 @@ function loadMapLibreWithGeocoder() {
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 // Shared modal wrapper — kept local so this file is self-contained.
+// Stays mounted (the map instance lives inside it), so `inert` keeps the closed
+// form out of the tab order / a11y tree and stops autoFocus firing on load.
 function Modal({ open, onClose, title, children, footer }) {
   return (
-    <div className={`modal-overlay ${open ? 'open' : ''}`}>
-      <div className="modal">
+    <div className={`modal-overlay ${open ? 'open' : ''}`} inert={!open}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
         {/* Pinned header */}
         <div className="modal-header" style={{ padding: '20px 28px 16px', flexShrink: 0 }}>
           <div className="modal-title">{title}</div>
-          <button className="modal-close" onClick={onClose}>&#x2715;</button>
+          <button className="modal-close" onClick={onClose} aria-label="Close">&#x2715;</button>
         </div>
         {/* Scrollable body */}
         <div style={{ overflowY: 'auto', padding: '20px 28px 16px', flex: 1 }}>
@@ -117,7 +119,6 @@ export default function Stops() {
   const [fName, setFName] = useState('');         // stop name
   const [fLat, setFLat] = useState('');           // latitude
   const [fLon, setFLon] = useState('');           // longitude
-  const [fOrder, setFOrder] = useState('');       // order_index (position on the route)
   const [fMorningTime, setFMorningTime] = useState(''); // scheduled morning arrival e.g. "07:35 AM"
   const [fEveningTime, setFEveningTime] = useState(''); // scheduled evening arrival e.g. "06:12 PM"
 
@@ -141,6 +142,42 @@ export default function Stops() {
 
   // Fetch on mount
   useEffect(() => { fetchStops(); }, []);
+
+  async function moveStop(type, stopId, direction) {
+    // 1. Extract both independent sequences based on current logical DB order
+    let morningSeq = [...stops].sort((a, b) => (a.morning_order_index || 0) - (b.morning_order_index || 0));
+    let eveningSeq = [...stops].sort((a, b) => (a.evening_order_index || 0) - (b.evening_order_index || 0));
+
+    // 2. Perform the swap on the targeted sequence
+    let targetSeq = type === 'morning' ? morningSeq : eveningSeq;
+    
+    const index = targetSeq.findIndex(s => s.id === stopId);
+    if (index === -1) return;
+    
+    if ((index === 0 && direction === -1) || (index === targetSeq.length - 1 && direction === 1)) return;
+
+    const targetIndex = index + direction;
+    const temp = targetSeq[index];
+    targetSeq[index] = targetSeq[targetIndex];
+    targetSeq[targetIndex] = temp;
+
+    // 3. Rebuild the payload with strict 0..N-1 indexing for BOTH sequences.
+    // This automatically heals any pre-existing duplicates in the database.
+    const payloadMap = {};
+    stops.forEach(s => { payloadMap[s.id] = { id: s.id }; });
+
+    morningSeq.forEach((s, i) => { payloadMap[s.id].morning_order_index = i; });
+    eveningSeq.forEach((s, i) => { payloadMap[s.id].evening_order_index = i; });
+
+    const payload = Object.values(payloadMap);
+
+    try {
+      await reorderStops(payload);
+      fetchStops();
+    } catch (e) {
+      showToast('Failed to reorder', 'error');
+    }
+  }
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -181,7 +218,7 @@ export default function Stops() {
           forwardGeocode: async (config) => {
             const features = [];
             try {
-              let request = `https://nominatim.openstreetmap.org/search?q=${config.query}&format=geojson&polygon_geojson=1&addressdetails=1`;
+              let request = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(config.query)}&format=geojson&polygon_geojson=1&addressdetails=1`;
               const response = await fetch(request);
               const geojson = await response.json();
               for (let feature of geojson.features) {
@@ -237,7 +274,7 @@ export default function Stops() {
   // ── Open Add modal ────────────────────────────────────────────────────────
   function openAddModal() {
     setEditingId(null);
-    setFName(''); setFLat(''); setFLon(''); setFOrder('');
+    setFName(''); setFLat(''); setFLon('');
     setFMorningTime(''); setFEveningTime('');
     setStopModal(true);
   }
@@ -248,7 +285,6 @@ export default function Stops() {
     setFName(stop.name);
     setFLat(String(stop.lat));
     setFLon(String(stop.lon));
-    setFOrder(String(stop.order_index + 1));
     // Convert stored AM/PM string → 24h for <input type="time">
     setFMorningTime(to24h(stop.morning_time || ''));
     setFEveningTime(to24h(stop.evening_time || ''));
@@ -256,8 +292,8 @@ export default function Stops() {
   }
 
   async function saveStop() {
-    if (!fName.trim() || !fLat || !fLon || fOrder === '') {
-      showToast('Name, location and order are required', 'error');
+    if (!fName.trim() || !fLat || !fLon) {
+      showToast('Name and location are required', 'error');
       return;
     }
     if (!fMorningTime) {
@@ -270,10 +306,9 @@ export default function Stops() {
     }
 
     const body = {
-      name:         fName.trim(),
-      lat:          parseFloat(fLat),
-      lon:          parseFloat(fLon),
-      order_index:  parseInt(fOrder, 10) - 1,
+      name:                fName.trim(),
+      lat:                 parseFloat(fLat),
+      lon:                 parseFloat(fLon),
       // Convert 24h picker value back to AM/PM string for DB storage
       morning_time: to12h(fMorningTime),
       evening_time: to12h(fEveningTime),
@@ -290,6 +325,10 @@ export default function Stops() {
       }
       setStopModal(false);
       fetchStops();
+      // Stop coords/order changed → recompute the planned route line so the
+      // PWA map + trail snap to the new shape (fire-and-forget; OSRM recompute
+      // runs server-side, no need to block the modal close).
+      refreshRouteGeometry().catch(() => {});
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -310,6 +349,8 @@ export default function Stops() {
       showToast(`"${deletingStop.name}" removed`);
       setDeleteModal(false);
       fetchStops();
+      // Removing a stop changes the route shape → recompute planned geometry.
+      refreshRouteGeometry().catch(() => {});
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -377,6 +418,7 @@ export default function Stops() {
                   {label}
                 </div>
                 <select
+                  aria-label={label}
                   disabled={isLoading}
                   value={currentHolder?.id ?? ''}
                   onChange={e => {
@@ -421,7 +463,8 @@ export default function Stops() {
                 <th>Stop Name</th>
                 <th>Latitude</th>
                 <th>Longitude</th>
-                <th>Order</th>
+                <th>Morning Order</th>
+                <th>Evening Order</th>
                 <th>Morning Time</th>
                 <th>Evening Time</th>
                 <th>Route Terminal Role</th>
@@ -435,7 +478,24 @@ export default function Stops() {
                   <td><strong style={{ fontWeight: 600 }}>{s.name}</strong></td>
                   <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>{s.lat}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>{s.lon}</td>
-                  <td className="text-muted">{s.order_index + 1}</td>
+                  <td className="text-muted">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {s.morning_order_index + 1}
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <button style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0', fontSize: '10px' }} onClick={() => moveStop('morning', s.id, -1)}>▲</button>
+                        <button style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0', fontSize: '10px' }} onClick={() => moveStop('morning', s.id, 1)}>▼</button>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="text-muted">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {s.evening_order_index + 1}
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <button style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0', fontSize: '10px' }} onClick={() => moveStop('evening', s.id, -1)}>▲</button>
+                        <button style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0', fontSize: '10px' }} onClick={() => moveStop('evening', s.id, 1)}>▼</button>
+                      </div>
+                    </div>
+                  </td>
                   <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>
                     {s.morning_time || '—'}
                   </td>
@@ -463,7 +523,7 @@ export default function Stops() {
               ))}
               {stops.length === 0 && (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>
+                  <td colSpan="9" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>
                     No stops yet. Add the first stop to get started.
                   </td>
                 </tr>
@@ -490,8 +550,9 @@ export default function Stops() {
         {/* Two-column form layout */}
         <div className="col-2">
           <div className="form-group">
-            <label className="form-label">Stop Name</label>
+            <label className="form-label" htmlFor="stop-name">Stop Name</label>
             <input
+              id="stop-name"
               type="text"
               className="form-input"
               placeholder="e.g. Pattom Junction"
@@ -500,22 +561,13 @@ export default function Stops() {
               autoFocus
             />
           </div>
-          <div className="form-group">
-            <label className="form-label">Order Index</label>
-            <input
-              type="number"
-              className="form-input"
-              placeholder="e.g. 5"
-              min="0"
-              value={fOrder}
-              onChange={e => setFOrder(e.target.value)}
-            />
-          </div>
+
         </div>
         <div className="col-2" style={{ marginTop: '8px' }}>
           <div className="form-group">
-            <label className="form-label">Morning Time</label>
+            <label className="form-label" htmlFor="stop-morning-time">Morning Time</label>
             <input
+              id="stop-morning-time"
               type="time"
               className="form-input"
               value={fMorningTime}
@@ -523,8 +575,9 @@ export default function Stops() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Evening Time</label>
+            <label className="form-label" htmlFor="stop-evening-time">Evening Time</label>
             <input
+              id="stop-evening-time"
               type="time"
               className="form-input"
               value={fEveningTime}

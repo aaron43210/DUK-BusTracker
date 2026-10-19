@@ -6,7 +6,7 @@
 //   3. Toast context (global notification system shared by all pages)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useState, useCallback, createContext, useContext, useEffect } from 'react';
+import React, { useState, useCallback, createContext, useContext, useEffect, lazy, Suspense } from 'react';
 // useState    → holds state values that trigger re-renders when changed
 // useCallback → memoises a function so it doesn't get recreated on every render
 // createContext → creates a "context" (global state accessible by any child component)
@@ -17,26 +17,28 @@ import {
   Routes,         // container for <Route> definitions
   Route,          // maps a URL path to a component
   NavLink,        // like <a> but adds an "active" CSS class automatically on the current page
-  Navigate,       // programmatic redirect — renders nothing, just changes the URL
   useNavigate,    // hook to imperatively navigate (used in logout button)
+  Navigate,       // hook to redirect unknown paths
 } from 'react-router-dom';
 
-import { setToken, clearToken } from './api.js'; // token management from our API module
+import { setToken, clearToken, getToken, logout } from './api.js'; // session management from our API module
 
 
 
-import dukLogo from './assets/duk_logo.png';
-import canlabLogo from './assets/canlab.png';
+import dukLogo from './assets/duk_logo.webp';
+import canlabLogo from './assets/canlab.webp';
 
-// Import every page component
+// Login and Maintenance are tiny and can be the first screen, so they stay in
+// the main bundle. Dashboard pages are split per route: a visit to /trips only
+// downloads the Trips chunk instead of every page up front.
 import Login from './pages/Login.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import Trips from './pages/Trips.jsx';
-import Stops from './pages/Stops.jsx';
-import Broadcast from './pages/Broadcast.jsx';
-import Suggestions from './pages/Suggestions.jsx';
-import RouteHistory from './pages/RouteHistory.jsx';
 import Maintenance from './pages/Maintenance.jsx';
+const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
+const Trips = lazy(() => import('./pages/Trips.jsx'));
+const Stops = lazy(() => import('./pages/Stops.jsx'));
+const Broadcast = lazy(() => import('./pages/Broadcast.jsx'));
+const Suggestions = lazy(() => import('./pages/Suggestions.jsx'));
+const RouteHistory = lazy(() => import('./pages/RouteHistory.jsx'));
 
 // ── Toast context ─────────────────────────────────────────────────────────────
 // createContext() creates a "channel" that any component in the tree can subscribe to.
@@ -93,11 +95,14 @@ function ToastProvider({ children }) {
 }
 
 // ── Auth state ────────────────────────────────────────────────────────────────
-// We store the token in React state and localStorage for persistence:
-// - Persists on tab reload/close so admins stay logged in
-// - Cleared explicitly on logout
+// The real credential is the HttpOnly `admin_session` cookie set by /admin/login,
+// which JavaScript cannot read. We keep only a non-sensitive boolean marker in
+// sessionStorage for client-side route gating:
+// - Survives a tab reload so admins stay on the dashboard; the cookie is the
+//   authority and the server enforces it (a 401/403 clears both and redirects).
+// - Cleared explicitly on logout.
 function App() {
-  const [token, setTokenState] = useState(() => localStorage.getItem('admin_token') || '');
+  const [token, setTokenState] = useState(() => getToken());
   const [isServerDown, setIsServerDown] = useState(false);
 
   useEffect(() => {
@@ -106,21 +111,24 @@ function App() {
     return () => window.removeEventListener('server-error', handleServerError);
   }, []);
 
-  // handleLogin: called by Login.jsx after a successful /admin/api/login response
+  // handleLogin: called by Login.jsx after a successful /admin/login response.
+  // The JWT is already in the HttpOnly cookie; `t` is just a truthy marker.
   function handleLogin(t) {
-    setToken(t);       // store in the api.js module variable → sent with every API call
+    setToken(t);       // flip the api.js auth flag → gates client-side routing
     setTokenState(t);  // store in React state → triggers re-render to show the dashboard
   }
 
-  // handleLogout: clears token from both places and navigates back to login
+  // handleLogout: revoke the session server-side (clears cookie + blocklists JTI),
+  // then clear local state and navigate back to login.
   function handleLogout() {
-    clearToken();      // wipe from api.js module variable
+    logout();          // best-effort server-side revoke + cookie clear
+    clearToken();      // wipe the api.js auth flag
     setTokenState(''); // wipe from React state → triggers re-render to show Login
   }
 
   return (
     // BrowserRouter reads the current URL and makes it available to child Routes/NavLink
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.VITE_ADMIN_BASE_PATH || '/duk/admin2026/'}>
       {/* ToastProvider wraps everything so any page can call showToast() */}
       <ToastProvider>
         {/* Conditional render:
@@ -173,6 +181,9 @@ function DashboardShell({ onLogout }) {
           <img
             src={dukLogo}
             alt="DUK Logo"
+            width={285}
+            height={136}
+            decoding="async"
             style={{
               width: '100%',       /* Fill the available sidebar width */
               maxWidth: '180px',   /* Don't let it get too huge */
@@ -211,6 +222,10 @@ function DashboardShell({ onLogout }) {
             <img
               src={canlabLogo}
               alt="CANLab Logo"
+              width={250}
+              height={141}
+              loading="lazy"
+              decoding="async"
               style={{ width: '100%', maxWidth: '125px', height: 'auto', display: 'block', transform: 'translateX(-12px)' }}
             />
           </div>
@@ -229,13 +244,15 @@ function DashboardShell({ onLogout }) {
       <main className="content">
         {/* Mobile Header Toggle (Only visible on small screens via CSS media query) */}
         <div className="mobile-header-row">
-          <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>
+          <button className="mobile-menu-btn" aria-label="Open menu" onClick={() => setMobileMenuOpen(true)}>
             ☰
           </button>
           <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>DUK Bus Tracker</span>
         </div>
 
-        {/* Routes: React Router renders whichever component matches the current URL */}
+        {/* Routes: React Router renders whichever component matches the current URL.
+            Suspense shows a spinner while a route's chunk downloads. */}
+        <Suspense fallback={<div className="loading-center"><div className="spinner"></div></div>}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/trips" element={<Trips />} />
@@ -246,6 +263,7 @@ function DashboardShell({ onLogout }) {
           {/* Catch-all: any unknown URL redirects to the dashboard */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </main>
     </div>
   );

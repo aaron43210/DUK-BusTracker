@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { verify, register, setApiToken } from '../api';
-import { saveToken, saveUser } from '../storage';
+import { saveToken, saveUser, saveRefreshToken } from '../storage';
 import { useToast } from '../App';
 
 const CODE_LENGTH = 6;
@@ -63,6 +63,7 @@ export default function OtpModal({ isOpen, email, name, boardingStop, onClose })
       const res = await verify(email, code);
       setApiToken(res.access_token);
       saveToken(res.access_token);
+      if (res.refresh_token) saveRefreshToken(res.refresh_token);
       saveUser(res.user);
       import('../firebase').then(m => m.requestAndSaveFcmToken()).catch(() => {});
       navigate('/route', { replace: true });

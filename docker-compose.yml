@@ -7,33 +7,81 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: duk
-      POSTGRES_PASSWORD: dukpassword
+      # Password MUST come from the environment (.env). Fail closed if unset so a
+      # known weak literal can never silently become the production password;
+      # DATABASE_URL in .env must use the SAME password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: duk_bus
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./duk_micro/schema.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    ports:
-      - "5432:5432"
+      # Generated from the ORM models (scripts/generate_init_schema.py). Was an
+      # old Supabase production dump that didn't match the models and seeded
+      # real user data into every new environment.
+      - ./duk_micro/sql_scripts/init_schema.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    # No host port: Postgres is reachable only on the internal bus-net, never from
+    # the public internet. (Was "5432:5432", a direct DB exposure.)
     networks:
       - bus-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U duk -d duk_bus"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # Require a password so the broker can't be read/written by anything that
+    # merely reaches the port. Fail closed if REDIS_PASSWORD is unset. Every
+    # service's REDIS_URL below must carry the SAME password.
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
+    environment:
+      # Exposed to the container only so the healthcheck can authenticate.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     volumes:
       - redis_data:/data
     networks:
       - bus-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   osrm-backend:
-    image: osrm/osrm-backend:latest
+    image: osrm/osrm-backend:v5.27.1
     restart: unless-stopped
     command: ["osrm-routed", "--algorithm", "mld", "/data/trivandrum_patched.osrm"]
     volumes:
       - ./duk_micro/osrm-data:/data
     networks:
       - bus-net
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    restart: unless-stopped
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    volumes:
+      - mlflow_data:/mlflow
+    networks:
+      - bus-net
+    # MLflow is deliberately NOT exposed through the public Traefik gateway: it has
+    # no authentication. It stays reachable only on the internal bus-net (e.g. via
+    # `docker compose exec` or an SSH tunnel for dev). Re-adding traefik.* labels
+    # here would publish an unauthenticated MLflow UI at /mlflow.
 
   # ==========================================
   # Application Services (Combined)
@@ -47,8 +95,14 @@ services:
     env_file:
       - ./duk_micro/.env
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
       - OSRM_URL=http://osrm-backend:5000
+      # Traefik reaches core-api from a Docker bridge IP (172.16.0.0/12 is
+      # Docker's default pool). Trusting it lets rate limits and audit logs use
+      # the real client from X-Forwarded-For instead of lumping every user into
+      # the proxy's single bucket. core-api publishes no port, so only the proxy
+      # can reach it on this network.
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-127.0.0.1,::1,172.16.0.0/12}
     depends_on:
       - postgres
       - redis
@@ -56,17 +110,34 @@ services:
     volumes:
       - ./duk_micro/models:/app/models
       - audit_logs:/app/logs
+      - ${FIREBASE_CREDS_PATH:-/opt/duk_micro/firebase_creds.json}:/opt/duk_micro/firebase_creds.json:ro
     networks:
       - bus-net
+    # No host port: core-api is reached only through the Traefik gateway, never
+    # directly. (Was "8000:8000", which bypassed the proxy and TLS.)
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/gps/health', timeout=4).status==200 else 1)\""]
+      interval: 20s
+      timeout: 6s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
     labels:
       - "traefik.enable=true"
-      # Route traffic matching /api, /ws, /docs to this container (works with any IP or domain)
+      # HTTP router (kept so http://<host> and local dev keep working)
       - "traefik.http.routers.core-api.rule=PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.core-api.entrypoints=web"
-      # Optional Let's Encrypt (requires uncommenting cert resolver in traefik args)
-      # - "traefik.http.routers.core-api-secure.rule=(Host(`duk.ac.in`) || Host(`localhost`)) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`))"
-      # - "traefik.http.routers.core-api-secure.entrypoints=websecure"
-      # - "traefik.http.routers.core-api-secure.tls.certresolver=myresolver"
+      # Redirect plain HTTP to HTTPS in production (activates once ACME issues a cert)
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.permanent=true"
+      # HTTPS router with Let's Encrypt. Set DUK_DOMAIN in .env to your real domain.
+      - "traefik.http.routers.core-api-secure.rule=PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
+      - "traefik.http.routers.core-api-secure.entrypoints=websecure"
+      - "traefik.http.routers.core-api-secure.tls=true"
+      - "traefik.http.routers.core-api-secure.tls.certresolver=myresolver"
 
   background-workers:
     image: duk_micro_unified:latest
@@ -78,38 +149,85 @@ services:
     env_file:
       - ./duk_micro/.env
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
     depends_on:
       - postgres
       - redis
     volumes:
       - ./duk_micro/models:/app/models
+      - ${FIREBASE_CREDS_PATH:-/opt/duk_micro/firebase_creds.json}:/opt/duk_micro/firebase_creds.json:ro
     networks:
       - bus-net
+    # No HTTP surface (Celery/asyncio workers), so no HTTP healthcheck. Memory is
+    # capped to guard against the prior celery-OOM class of failure.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   # ==========================================
   # Reverse Proxy
   # ==========================================
+  # Mediates Traefik's access to the Docker API. Traefik never touches
+  # /var/run/docker.sock directly; it talks to this proxy over the internal
+  # network, and the proxy only forwards the read-only endpoints Traefik needs
+  # (containers + events). A Traefik RCE therefore can't drive the host Docker
+  # daemon (create privileged containers, mount the host FS, etc.).
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      # Everything defaults to 0 (denied). Grant only what the Traefik docker
+      # provider reads.
+      - CONTAINERS=1
+      - NETWORKS=1
+      - EVENTS=1
+      - PING=1
+      - VERSION=1
+      # Explicitly deny write/dangerous surfaces.
+      - POST=0
+      - EXEC=0
+      - IMAGES=0
+      - VOLUMES=0
+      - INFO=0
+      - SERVICES=0
+      - TASKS=0
+      - SWARM=0
+      - SYSTEM=0
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - bus-net
+
   gateway:
-    image: traefik:latest
+    image: traefik:v3.3
     restart: unless-stopped
     command:
       - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      # Reach Docker through the socket-proxy, not the raw socket.
+      - "--providers.docker.endpoint=tcp://socket-proxy:2375"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
-      # To enable Let's Encrypt SSL, uncomment the lines below and add your email
-      # - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
-      # - "--certificatesresolvers.myresolver.acme.email=admin@duk.ac.in"
-      # - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      # Let's Encrypt via TLS-ALPN challenge on :443. Requires the host to be
+      # reachable at a real domain on 443 (set the router Host rules / DUK_DOMAIN
+      # and a valid ACME email). Issuance is a no-op until DNS points here, so
+      # HTTP keeps working in the meantime.
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=admin@duk.ac.in"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    # Port 80 must be published on the standard port so external clients can be
+    # redirected to HTTPS and so ACME can validate. 443 serves TLS.
     ports:
       - "80:80"
       - "443:443"
     environment:
       - DOCKER_API_VERSION=1.41
+    depends_on:
+      - socket-proxy
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      # Docker socket is no longer mounted here — access is brokered by socket-proxy.
       - "letsencrypt_data:/letsencrypt"
     networks:
       - bus-net
@@ -123,3 +241,5 @@ volumes:
   redis_data:
   letsencrypt_data:
   audit_logs:
+  mlflow_data:
+

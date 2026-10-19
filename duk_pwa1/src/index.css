@@ -3,8 +3,7 @@
    Design system: tokens, typography, layout shell, all components
     */
 
-/*  Google Font: Inter  */
-/* Loaded via <link> in index.html for performance */
+/*  Typography: native system font stack (no web-font download)  */
 
 /*  CSS Design Tokens  */
 :root {
@@ -54,7 +53,7 @@
   --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.12);
 
   /* Typography */
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
   /* Transitions */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -67,6 +66,9 @@
   --sab: env(safe-area-inset-bottom, 0px);
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
+
+  /* On-screen keyboard height (set by keyboardInsets.js via VisualViewport). */
+  --kb: 0px;
 }
 
 /*  Reset  */
@@ -112,8 +114,11 @@ button {
 }
 
 input,
-textarea {
+textarea,
+select {
   font-family: var(--font);
+  /* >=16px stops iOS from zooming the page when a field is focused. */
+  font-size: 16px;
 }
 
 /*  App Shell  */
@@ -138,7 +143,7 @@ textarea {
 
 /*  TopBar  */
 .topbar {
-  height: var(--topbar-height);
+  height: calc(var(--topbar-height) + var(--sat));
   padding-top: var(--sat);
   background: var(--white);
   border-bottom: 1px solid var(--separator);
@@ -163,10 +168,16 @@ textarea {
   transition: background var(--dur-fast) var(--ease);
 }
 
-.topbar__icon-btn:hover,
 .topbar__icon-btn:active {
   background: var(--mint-lighter);
   color: var(--mint-text);
+}
+
+@media (hover: hover) {
+  .topbar__icon-btn:hover {
+    background: var(--mint-lighter);
+    color: var(--mint-text);
+  }
 }
 
 /* Notification badge on the bell icon */
@@ -203,14 +214,14 @@ textarea {
 .topbar__center {
   display: flex;
   align-items: center;
-  gap: 80px;
+  gap: 16px;
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .topbar__logo-img {
-  height: 50px;
+  height: 40px;
   width: auto;
   object-fit: contain;
 }
@@ -617,7 +628,7 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 9999;
+  z-index: 999999;
   pointer-events: none;
   align-items: center;
 }
@@ -1012,7 +1023,7 @@ textarea {
 }
 
 .ios-screen-title {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--black);
 }
@@ -1257,9 +1268,9 @@ textarea {
   left: 115px;
   /* time-col(75px) + track-col center(40px/2) + container padding(20px) */
   transform: translateX(-50%) translateY(-50%);
-  width: 36px;
-  height: 36px;
-  border-radius: 18px;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
   background: var(--theme-bg);
   display: flex;
   align-items: center;
@@ -1290,9 +1301,9 @@ textarea {
 }
 
 .ios-bus-badge-circle {
-  width: 28px;
-  height: 28px;
-  border-radius: 14px;
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
   background: var(--theme-color);
   display: flex;
   align-items: center;
@@ -2136,6 +2147,17 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
+}
+
+/* Force descending stacking order so earlier dropdowns pop over later ones */
+.setup-field:nth-child(1) { z-index: 40; }
+.setup-field:nth-child(2) { z-index: 30; }
+.setup-field:nth-child(3) { z-index: 20; }
+.setup-field:nth-child(4) { z-index: 10; }
+
+.setup-field:focus-within {
+  z-index: 50;
 }
 
 .setup-label {
@@ -2424,6 +2446,8 @@ textarea {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  /* Lift the bottom sheet above the on-screen keyboard. */
+  padding-bottom: var(--kb);
 }
 
 .otp-backdrop {
@@ -2696,8 +2720,8 @@ textarea {
   inset: 0;
   z-index: 99999;
   background-color: #020b22;
-  background-image: url('/splash_screen.png');
-  background-size: 100% 100%;
+  background-image: url('/splash_screen.webp');
+  background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
   display: flex;
@@ -2709,10 +2733,8 @@ textarea {
 .splash-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(to bottom,
-      rgba(1, 12, 42, 0.45),
-      rgba(1, 18, 55, 0.1) 45%,
-      rgba(1, 9, 30, 0.65));
+  /* Removed linear-gradient so the image is bright and clear */
+  background: transparent;
   z-index: 1;
 }
 
@@ -2756,7 +2778,7 @@ textarea {
 .screen {
   flex: 1;
   background: var(--bg-gray);
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .settings-screen {
@@ -2820,7 +2842,7 @@ textarea {
 }
 
 .settings-row__value {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--med-gray);
 }
@@ -2934,6 +2956,10 @@ textarea {
   justify-content: center;
   z-index: 100000;
   padding: 24px;
+  /* When the keyboard opens, keep the modal centred in the space *above* it
+     and allow the overlay to scroll so no field is trapped behind the keyboard. */
+  padding-bottom: calc(24px + var(--kb));
+  overflow-y: auto;
 }
 
 .modal-content {
@@ -2945,6 +2971,9 @@ textarea {
   position: relative;
   box-shadow: var(--shadow-lg);
   animation: modalPop var(--dur-normal) var(--ease) forwards;
+  /* Tall forms scroll internally instead of overflowing behind the keyboard. */
+  max-height: calc(100dvh - var(--sat) - var(--kb) - 48px);
+  overflow-y: auto;
 }
 
 @keyframes modalPop {
@@ -3053,8 +3082,8 @@ textarea {
 /*  Help Screen  */
 .help-screen {
   background: var(--white);
-  min-height: 100vh;
-  height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   padding-bottom: 40px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -3233,7 +3262,7 @@ textarea {
   color: #6b7280;
   font-size: 14px;
   font-weight: 600;
-  font-family: var(--font-primary, -apple-system, BlinkMacSystemFont, 'Inter', sans-serif);
+  font-family: var(--font-primary, -apple-system, BlinkMacSystemFont, sans-serif);
   cursor: pointer;
   letter-spacing: -0.2px;
   transition:
@@ -3503,4 +3532,66 @@ body {
   border-radius: 16px !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
   z-index: 99999 !important;
+}.marker-wrapper {
+  position: relative;
+  width: 60px;
+  height: 60px;
+}
+
+.marker-pulse {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  background: var(--pin-inner, rgba(250, 204, 21, 0.4));
+  border-radius: 50%;
+  left: 18px;
+  top: 18px;
+  animation: pulseMarker 2s infinite;
+}
+
+.marker-rotate {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.bus-pin {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  background: var(--pin-bg, #000);
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.3);
+  transition: background 0.3s ease;
+}
+
+.bus-pin::before {
+  content: '';
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  background: var(--pin-inner, #facc15);
+  border-radius: 50%;
+  top: 8px;
+  left: 8px;
+  transition: background 0.3s ease;
+}
+
+.route-style-bus, .route-style-bus-off {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  font-size: 16px;
+  line-height: 1;
+}
+
+@keyframes pulseMarker {
+  0% { transform: scale(0.9); opacity: 1; }
+  100% { transform: scale(2.5); opacity: 0; }
 }

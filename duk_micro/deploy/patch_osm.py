@@ -21,6 +21,25 @@ LIVE_FILE = os.path.join(DATA_DIR, "technopark_live.osm")
 BBOX_TECHNOPARK = "76.872,8.554,76.882,8.564"
 OSM_API_URL_TECHNOPARK = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_TECHNOPARK}"
 
+# Nellimoodu corridor
+BBOX_NELLIMOODU = "77.040,8.370,77.060,8.400"
+OSM_API_URL_NELLIMOODU = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_NELLIMOODU}"
+
+# Thampanoor / East Fort corridor — covers the bus route from Chandrasekharan Nair
+# Stadium down to Thampanoor and the approach to Trivandrum Central railway station.
+# This area has complex one-ways, the KSRTC bus bay, and divided roads that are
+# frequently re-tagged in OSM. The static kerala.osm.pbf misses these updates and
+# causes OSRM to return NoSegment / fall back to straight-line Haversine for the
+# last leg into Thampanoor, making the route line "snap" incorrectly near Central.
+BBOX_THAMPANOOR = "76.940,8.480,76.965,8.510"
+OSM_API_URL_THAMPANOOR = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_THAMPANOOR}"
+
+# Restrict flyover decoupling to the NH66 flyover corridor (Kazhakuttam) so it can
+# never touch bridges elsewhere in the district. Format "minlon,minlat,maxlon,maxlat".
+# Set FLYOVER_BBOX="" to allow decoupling everywhere (still interior-crossings only).
+_fb = os.environ.get("FLYOVER_BBOX", "76.84,8.54,76.90,8.60")
+FLYOVER_BBOX = tuple(float(x) for x in _fb.split(",")) if _fb.strip() else None
+
 
 
 def fetch_osm(url, label):
@@ -37,12 +56,18 @@ def fetch_osm(url, label):
 
 live_xml_data       = fetch_osm(OSM_API_URL_TECHNOPARK, "Technopark corridor")
 nellimoodu_xml_data = fetch_osm(OSM_API_URL_NELLIMOODU, "Nellimoodu corridor")
+thampanoor_xml_data = fetch_osm(OSM_API_URL_THAMPANOOR, "Thampanoor/East Fort corridor")
 
-if not live_xml_data and not nellimoodu_xml_data:
-    print(" No OSM data available.")
-    sys.exit(1)
 if not live_xml_data:
-    live_xml_data = nellimoodu_xml_data
+    print(" FATAL: Technopark corridor OSM fetch failed. This corridor is on the bus "
+          "route, so patching without it would ship a stale/incomplete graph. "
+          "Aborting so the build fails loudly instead of continuing on partial data.")
+    sys.exit(1)
+if not nellimoodu_xml_data:
+    print(" WARNING: Nellimoodu corridor fetch failed — continuing without it (secondary).")
+if not thampanoor_xml_data:
+    print(" WARNING: Thampanoor/East Fort corridor fetch failed — OSRM may miss the "
+          "last leg into Thampanoor and fall back to straight-line Haversine near Central.")
 
 print(" Parsing base OSM and live OSM trees...")
 if not os.path.exists(OSM_FILE):
@@ -74,77 +99,124 @@ def merge_live_osm(xml_data, base_root):
 
 merge_live_osm(live_xml_data, base_root)
 merge_live_osm(nellimoodu_xml_data, base_root)
+merge_live_osm(thampanoor_xml_data, base_root)
 
-# Global pass to remove one-way restrictions from all primary, secondary, and tertiary roads.
-# This ensures the bus can travel both ways on major roads regardless of how OSM has tagged them.
-# Trunk/motorway are intentionally left alone — those are real one-way expressways.
-BUS_ROAD_TYPES = {"primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"}
-oneway_fixed = 0
-for way in base_root.findall("way"):
-    tags = {t.attrib.get("k"): t.attrib.get("v") for t in way.findall("tag")}
-    if tags.get("highway") in BUS_ROAD_TYPES and tags.get("oneway") in ("yes", "1", "true", "-1"):
-        for t in way.findall("tag"):
-            if t.attrib.get("k") == "oneway":
-                t.attrib["v"] = "no"
-                oneway_fixed += 1
-print(f"  Made {oneway_fixed} primary/secondary/tertiary roads two-way!")
 
-# ---------------------------------------------------------------------------
-# AUTOMATIC FLYOVER DECOUPLING:
-# Disconnect any shared nodes between the elevated trunk flyover and the underpass road
-# ---------------------------------------------------------------------------
-print(" Decoupling elevated NH66 flyover from ground underpass...")
+def decouple_flyover(base_root):
+    """Separate elevated bridge ways (the NH66 flyover) from the ground road
+    underneath so OSRM cannot "jump" the bus between levels at a shared node.
 
-# Find all trunk (flyover) ways
-trunk_node_ids = set()
-for way in base_root.findall("way"):
-    tags = {t.attrib.get("k"): t.attrib.get("v") for t in way.findall("tag")}
-    if tags.get("highway") in ["trunk", "motorway", "trunk_link"]:
-        for nd in way.findall("nd"):
-            trunk_node_ids.add(nd.attrib.get("ref"))
+    Standard fix: where a bridge way and a lower-layer ground way share a node
+    that is NOT a ramp junction (no *_link way uses it), the shared node is a
+    tagging artifact of the flyover crossing over the underpass — they should
+    not connect there. We give the upper (bridge) level its own copy of that
+    node, reassigning it in every bridge way (so the flyover stays continuous
+    with itself) while the ground ways keep the original node. Ramp junctions
+    (any *_link way on the node) are left connected so on/off ramps still work.
 
-# Find underpass / cross-connector ways
-all_nodes_dict = {n.attrib["id"]: n for n in base_root.findall("node")}
-decoupled_count = 0
-next_custom_node_id = 9999900000
+    Conservative and idempotent: if OSM already models the levels correctly it
+    finds nothing to split and is a no-op. Every split is logged for review.
+    """
+    ways = []
+    max_id = 0
+    for child in base_root:
+        cid = child.attrib.get("id")
+        if cid and cid.lstrip("-").isdigit():
+            max_id = max(max_id, abs(int(cid)))
+        if child.tag != "way":
+            continue
+        nds = [nd.attrib["ref"] for nd in child.findall("nd")]
+        tags = {t.attrib["k"]: t.attrib["v"] for t in child.findall("tag")}
+        highway = tags.get("highway", "")
+        try:
+            layer = int(tags.get("layer", "0"))
+        except ValueError:
+            layer = 0
+        is_bridge = tags.get("bridge", "no") not in ("no", "", None)
+        if is_bridge and layer <= 0:
+            layer = 1  # a bridge with no explicit layer sits above ground
+        ways.append({"elem": child, "nds": nds, "layer": layer,
+                     "is_bridge": is_bridge, "is_link": highway.endswith("_link")})
 
-for way in base_root.findall("way"):
-    tags = {t.attrib.get("k"): t.attrib.get("v") for t in way.findall("tag")}
-    h_type = tags.get("highway")
-    if h_type and h_type not in ["trunk", "motorway", "trunk_link", "motorway_link"]:
-        nds = way.findall("nd")
-        if len(nds) >= 2:
-            refs = [nd.attrib.get("ref") for nd in nds]
-            lats = [float(all_nodes_dict[r].attrib["lat"]) for r in refs if r in all_nodes_dict]
-            lons = [float(all_nodes_dict[r].attrib["lon"]) for r in refs if r in all_nodes_dict]
-            if lats and lons:
-                min_lat, max_lat = min(lats), max(lats)
-                min_lon, max_lon = min(lons), max(lons)
+    # Per node: bridge/ground layers, ramp flag, and whether it is interior to a
+    # bridge vs one of its endpoints. We ONLY decouple interior crossings (a flyover
+    # passing OVER a ground road mid-span). A bridge's END nodes are how you drive
+    # on/off it — severing those disconnects the bridge from the network, which is
+    # what the earlier over-aggressive ~3000-node split did and why routing/route
+    # history broke. Endpoints are therefore never touched.
+    bridge_layer, ground_layer, has_link = {}, {}, set()
+    bridge_interior, bridge_endpoint = set(), set()
+    for w in ways:
+        nds = w["nds"]
+        for ref in nds:
+            if w["is_link"]:
+                has_link.add(ref)
+            if w["is_bridge"]:
+                bridge_layer[ref] = max(bridge_layer.get(ref, w["layer"]), w["layer"])
+            else:
+                ground_layer[ref] = min(ground_layer.get(ref, w["layer"]), w["layer"])
+        if w["is_bridge"] and nds:
+            bridge_endpoint.add(nds[0])
+            bridge_endpoint.add(nds[-1])
+            for ref in nds[1:-1]:
+                bridge_interior.add(ref)
 
-                # Bus route corridors where two-way travel must be allowed:
-                in_technopark = (min_lat > 8.550 and max_lat < 8.570 and min_lon > 76.870 and max_lon < 76.885)
-                in_nellimoodu = (min_lat > 8.370 and max_lat < 8.400 and min_lon > 77.040 and max_lon < 77.060)
+    node_coords = {n.attrib["id"]: (n.attrib.get("lat"), n.attrib.get("lon"))
+                   for n in base_root.findall("node")}
 
-                if in_technopark or in_nellimoodu:
-                    for nd in nds:
-                        ref = nd.attrib.get("ref")
-                        if ref in trunk_node_ids and ref in all_nodes_dict:
-                            orig_node = all_nodes_dict[ref]
-                            # Create a decoupled clone node so ground way does not touch flyover
-                            new_node_id = str(next_custom_node_id)
-                            next_custom_node_id += 1
-                            cloned_node = ET.Element("node", {
-                                "id": new_node_id,
-                                "lat": orig_node.attrib["lat"],
-                                "lon": orig_node.attrib["lon"],
-                                "version": "1"
-                            })
-                            base_root.append(cloned_node)
-                            all_nodes_dict[new_node_id] = cloned_node
-                            nd.attrib["ref"] = new_node_id
-                            decoupled_count += 1
+    def _in_scope(ref):
+        if FLYOVER_BBOX is None:
+            return True
+        c = node_coords.get(ref)
+        if not c or c[0] is None:
+            return False
+        lat, lon = float(c[0]), float(c[1])
+        mnlon, mnlat, mxlon, mxlat = FLYOVER_BBOX
+        return mnlat <= lat <= mxlat and mnlon <= lon <= mxlon
 
-print(f" Decoupled {decoupled_count} shared nodes between flyover and underpass!")
+    to_split = {
+        ref for ref in bridge_interior
+        if ref not in bridge_endpoint          # never cut a bridge's on/off connection
+        and ref in ground_layer and ref not in has_link
+        and ground_layer[ref] < bridge_layer.get(ref, 1)
+        and _in_scope(ref)
+    }
+    if not to_split:
+        print("   ↳ Flyover decoupling: no interior cross-layer crossings in scope (no-op)")
+        return
+
+    new_ref = {}
+    next_id = max_id + 1
+    for ref in to_split:
+        lat, lon = node_coords.get(ref, (None, None))
+        if lat is None:
+            continue
+        nid = str(next_id); next_id += 1
+        new_ref[ref] = nid
+        base_root.append(ET.Element("node", {"id": nid, "lat": lat, "lon": lon,
+                                              "version": "1", "visible": "true"}))
+
+    reassigned = 0
+    for w in ways:
+        if not w["is_bridge"]:
+            continue
+        for nd in w["elem"].findall("nd"):
+            if nd.attrib["ref"] in new_ref:
+                nd.attrib["ref"] = new_ref[nd.attrib["ref"]]
+                reassigned += 1
+    print(f"   ↳ Flyover decoupling: split {len(new_ref)} interior crossing node(s), "
+          f"reassigned {reassigned} bridge references (scope={'bbox' if FLYOVER_BBOX else 'all'})")
+
+
+decouple_flyover(base_root)
+
+# NOTE: We used to rewrite oneway=no on every primary/secondary/tertiary road here,
+# on the theory that median dividers were blocking the bus. In practice it let the
+# router send trails the wrong way down real one-way streets and cut through small
+# roads. One-way tags are now respected as mapped (oneway_handling = true in car.lua),
+# so this global mutation has been removed. Genuine mis-tagged roads should be fixed
+# in OSM upstream, not blanket-overridden.
+
 print(f" Writing final patched OSM to {PATCHED_FILE}...")
 base_tree.write(PATCHED_FILE, encoding="utf-8", xml_declaration=True)
 print(" Ready for fresh OSRM graph compilation!")

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getLatestGps } from '../api.js';
+
 
 export default function Maintenance({ setServerIsDown }) {
   const [isRetrying, setIsRetrying] = useState(false);
@@ -7,10 +7,13 @@ export default function Maintenance({ setServerIsDown }) {
   const handleRetry = async () => {
     setIsRetrying(true);
     try {
-      // Ping the server to see if it's back up
-      await getLatestGps();
-      // If we got here, the API call succeeded and the server is back!
-      setServerIsDown(false);
+      // Ping the server to see if it's back up using raw fetch to avoid apiFetch interceptors
+      const res = await fetch('/api/v1/latest');
+      if (res.ok || res.status === 401 || res.status === 403) {
+        // If we got here, the API call succeeded and the server is back!
+        // Even if unauthorized, it means the server is reachable
+        setServerIsDown(false);
+      }
     } catch (err) {
       // Still down
     } finally {
@@ -44,7 +47,7 @@ export default function Maintenance({ setServerIsDown }) {
         </button>
         
         <div className="maintenance-status">
-          <div className="status-dot"></div>
+          <div className="maintenance-status-dot"></div>
           <span>Waiting for server response</span>
         </div>
       </div>

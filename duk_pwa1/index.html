@@ -1,16 +1,19 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="theme-liquid-glass">
   <head>
     <meta charset="UTF-8" />
 
+
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
 
-    <meta name="theme-color" content="#A2D7C3" />
+    <meta name="theme-color" content="#FFFFFF" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- Opaque status bar (matches the white header). black-translucent used to
+         paint a grey haze over the header near the notch — "default" is crisp. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="DUK Bus" />
 
@@ -20,23 +23,23 @@
       content="Real-time bus tracking for Digital University Kerala students."
     />
 
-    <link rel="apple-touch-icon" href="/buslogo.png" />
-    <link rel="icon" href="/buslogo.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png" />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Both logos are in the header of every screen (the CAN Lab one is the
+         login page's LCP element); fetch them before the JS that renders them. -->
+    <link rel="preload" as="image" type="image/webp" href="./canlab.webp" fetchpriority="high" />
+    <link rel="preload" as="image" type="image/webp" href="./duk-logo.webp" />
 
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+    <!-- No web fonts: the app runs on iOS, where the system stack is SF Pro.
+         Google Identity Services is injected by the login page only. -->
 
     <!-- Critical splash styling so the loading screen is visible before JS/CSS loads -->
     <style>
       html,
       body,
       #root {
-        height: 100%;
+        height: 100dvh;
         margin: 0;
       }
 
@@ -45,21 +48,10 @@
         inset: 0;
         z-index: 99999;
         background-color: #020b22;
-        background-image: url("/splash_screen.png");
-        background-size: 100% 100%;
+        background-image: url("/splash_screen.webp");
+        background-size: cover;
         background-position: center;
         background-repeat: no-repeat;
-      }
-
-      .splash-overlay {
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(
-          to bottom,
-          rgba(1, 12, 42, 0.45),
-          rgba(1, 18, 55, 0.1) 45%,
-          rgba(1, 9, 30, 0.65)
-        );
       }
 
       .splash-content {
@@ -69,7 +61,7 @@
         transform: translateX(-50%);
         z-index: 2;
         text-align: center;
-        color: white;
+        color: #333333;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
 
@@ -77,9 +69,9 @@
         width: 38px;
         height: 38px;
         border-radius: 50%;
-        border: 3px solid rgba(255, 255, 255, 0.15);
+        border: 3px solid rgba(0, 0, 0, 0.1);
         border-top-color: #10a8ff;
-        border-right-color: #67e6ae;
+        border-right-color: #4fb893;
         animation: splash-spin 1s linear infinite;
         margin: 0 auto 12px;
       }
@@ -96,12 +88,46 @@
         letter-spacing: 0.5px;
       }
     </style>
+
+    <script>
+      (function() {
+        var ua = navigator.userAgent || navigator.vendor || window.opera;
+        var isIos = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+        var isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        // Let Lighthouse / PageSpeed Insights audit the real app instead of the gate page.
+        var isAudit = /Chrome-Lighthouse/.test(ua);
+
+        if (!isIos && !isLocalhost && !isAudit) {
+          window.__BLOCKED__ = true;
+          document.addEventListener('DOMContentLoaded', function() {
+            document.body.innerHTML = '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; text-align: center; background: #f0f5fa; font-family: sans-serif;"><img src="./duk-logo.webp" alt="DUK Logo" style="width: 280px; margin-bottom: 24px; object-fit: contain;" /><h2 style="font-size: 24px; font-weight: 700; margin-bottom: 12px; color: #111;">Mobile App Only</h2><p style="color: #666; font-size: 16px; line-height: 1.5; max-width: 400px;">The Bus Tracker is only available as a mobile application.<br /><br />Please open this link on your <b>iPhone or iPad</b> to install it.</p></div>';
+          });
+          return;
+        }
+
+        if (isIos && !isStandalone && !isLocalhost) {
+          window.__BLOCKED__ = true;
+          document.addEventListener('DOMContentLoaded', function() {
+            document.body.innerHTML = '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; text-align: center; background: #f0f5fa; font-family: sans-serif;"><img src="./duk-logo.webp" alt="DUK Logo" style="width: 280px; margin-bottom: 24px; object-fit: contain;" /><h2 style="font-size: 24px; font-weight: 700; margin-bottom: 12px; color: #111;">Install Required</h2><p style="color: #666; font-size: 16px; line-height: 1.5; max-width: 400px;">This app is designed to run natively on your iPhone.<br /><br />Tap the <b>Share</b> icon below and select <br /><b>"Add to Home Screen"</b> to use it.</p></div>';
+          });
+          return;
+        }
+
+        // Logged-out visitors go straight to the login screen, which dismisses
+        // the splash immediately — skip downloading its background photo.
+        try {
+          if (!localStorage.getItem('duk_jwt_token')) {
+            document.documentElement.classList.add('splash-plain');
+          }
+        } catch (e) { }
+      })();
+    </script>
   </head>
 
-  <body>
+  <body class="theme-liquid-glass">
     <div id="root">
       <div class="splash-screen">
-        <div class="splash-overlay"></div>
         <div class="splash-content">
           <div class="splash-loader"></div>
           <div class="splash-text">Loading...</div>

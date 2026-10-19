@@ -1,16 +1,19 @@
-import React, { useState, useEffect, useRef, useCallback, useContext } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext, lazy, Suspense } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Crosshair, Plus, Minus } from 'lucide-react';
 import TopBar from '../components/TopBar';
 import DrawerMenu from '../components/DrawerMenu';
 import NotificationDrawer from '../components/NotificationDrawer';
-import BusMapView from '../components/BusMapView';
 import BusIdleAnimation from '../components/BusIdleAnimation';
 import { getUser } from '../storage';
 import { getMapViewport, haversineDistKm, parseTimeToMinutes, computeEstimatedTime } from '../timetable';
 import { SplashContext, useNotifications, useViewMode } from '../App';
 import { useAppContext } from '../context';
 import useBusTracking from '../hooks/useBusTracking';
+
+// maplibre-gl is ~1 MB of source, so the map is split into its own chunk and
+// only fetched the first time the user opens the Map tab.
+const BusMapView = lazy(() => import('../components/BusMapView'));
 
 export default function RouteView() {
   const { fetchAll, locationName } = useBusTracking();
@@ -31,6 +34,12 @@ export default function RouteView() {
   const startYRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const mapRef = useRef(null);
+  // Once mounted the map stays mounted (display-toggled) so its state survives tab switches.
+  const [mapMounted, setMapMounted] = useState(viewMode === 'map');
+
+  useEffect(() => {
+    if (viewMode === 'map') setMapMounted(true);
+  }, [viewMode]);
 
   const {
     tripState, busPosition, history: routeHistory, stops,
@@ -40,6 +49,9 @@ export default function RouteView() {
   const activeBusCoord = React.useMemo(() => {
     return busPosition?.lon && busPosition?.lat ? [Number(busPosition.lon), Number(busPosition.lat)] : null;
   }, [busPosition?.lon, busPosition?.lat]);
+
+  // True only when a real scheduled trip is actively running
+  const isActiveTrip = ['active', 'connecting', 'on_trip', 'late'].includes(tripState?.status);
 
   const user = getUser();
 
@@ -87,49 +99,117 @@ export default function RouteView() {
   // --- Trip state helpers ---
   const tripName = tripState?.trip?.toLowerCase() || '';
   const tripStatus = tripState?.status || 'offline';
-  const isActive = tripStatus === 'active' || tripStatus === 'on_trip' || tripStatus === 'late';
+  const isActive = tripStatus === 'active' || tripStatus === 'on_trip' || tripStatus === 'late' || tripStatus === 'connecting';
   const showHistory = isActive || tripStatus === 'completed';
   const isUnscheduled = tripName === 'unscheduled';
 
   const direction = tripName.includes('morning') ? 'forward'
     : tripName.includes('evening') ? 'reverse'
-      : new Date().getHours() >= 14 ? 'reverse' : 'forward';
+      // Prefer the backend's explicit direction field over wall-clock heuristics—
+      // the heuristic fires before tripState loads and shows the wrong stop list.
+      : (tripState?.direction === 'forward' || tripState?.direction === 'reverse')
+        ? tripState.direction
+        : new Date().getHours() >= 14 ? 'reverse' : 'forward';
 
   const lateMins = tripState?.late_by_minutes ?? null;
   const isOnline = isActive;
   const isIdleMode = ['offline', 'weekend', 'idle', 'completed', 'waiting'].includes(tripStatus) || isUnscheduled;
 
-  const visitedStops = React.useMemo(() => showHistory ? (routeHistory?.visitedStops || {}) : {}, [showHistory, routeHistory?.visitedStops]);
-  const arrivalTimes = React.useMemo(() => showHistory ? (routeHistory?.arrivalTimes || {}) : {}, [showHistory, routeHistory?.arrivalTimes]);
+  // Genuinely receiving live telemetry from a bus that has actually started.
+  // The backend only reports 'active'/'on_trip'/'late' once GPS is alive and the
+  // trip is running; 'connecting' means the departure window is open but the bus
+  // has NOT reported live yet. We must not show ETAs, per-stop early/late labels,
+  // predicted times, or a "departed" state until this is true — otherwise the
+  // timeline fabricates delays and times before the bus has even moved.
+  const isTrackingLive =
+    (tripStatus === 'active' || tripStatus === 'on_trip' || tripStatus === 'late')
+    && busPosition?.is_live === true;
 
-  const timeToMins = (t) => {
-    if (!t) return 9999;
-    const [time, ampm] = t.trim().split(' ');
-    let [h, m] = time.split(':').map(Number);
-    if (ampm === 'PM' && h !== 12) h += 12;
-    if (ampm === 'AM' && h === 12) h = 0;
-    return h * 60 + m;
-  };
+  const visitedStops = React.useMemo(() => {
+    // Only use visited stops when we have an active trip AND a real trip_id.
+    // Without trip_id the backend can't scope the query and returns empty data;
+    // this guard ensures no stale cached data bleeds into the timeline.
+    if (!showHistory || !tripState?.trip_id) return {};
+    return routeHistory?.visitedStops || {};
+  }, [showHistory, tripState?.trip_id, routeHistory?.visitedStops]);
+
+  const arrivalTimes = React.useMemo(() => {
+    if (!showHistory || !tripState?.trip_id) return {};
+    return routeHistory?.arrivalTimes || {};
+  }, [showHistory, tripState?.trip_id, routeHistory?.arrivalTimes]);
 
   const stopsToShow = React.useMemo(() => {
     const filtered = stops.filter(s => direction === 'forward' ? !!s.morning_time : !!s.evening_time);
     return direction === 'forward'
-      ? [...filtered].sort((a, b) => timeToMins(a.morning_time) - timeToMins(b.morning_time))
-      : [...filtered].sort((a, b) => timeToMins(a.evening_time) - timeToMins(b.evening_time));
+      ? [...filtered].sort((a, b) => (a.morning_order_index || 0) - (b.morning_order_index || 0))
+      : [...filtered].sort((a, b) => (a.evening_order_index || 0) - (b.evening_order_index || 0));
   }, [stops, direction]);
 
-  const currentNextIdx = React.useMemo(() => stopsToShow.findIndex(s => !visitedStops[s.name]), [stopsToShow, visitedStops]);
-  const visitedCount = Object.keys(visitedStops).length;
-  const nextStop = currentNextIdx >= 0 ? stopsToShow[currentNextIdx] : null;
+  const closestStopIdx = React.useMemo(() => {
+    if (!activeBusCoord || stopsToShow.length === 0) return -1;
+    let minD = Infinity;
+    let idx = -1;
+
+    // Find the highest index among all visited stops, so we don't get stuck on a skipped stop.
+    let highestVisitedIdx = -1;
+    for (let i = 0; i < stopsToShow.length; i++) {
+      if (visitedStops[stopsToShow[i].name]) highestVisitedIdx = i;
+    }
+    let baseIdx = highestVisitedIdx + 1;
+    if (baseIdx >= stopsToShow.length) baseIdx = stopsToShow.length;
+    
+    // Widen the search window: 2 stops behind and 5 ahead.
+    // The narrower [-1,+3] window missed the bus's actual stop whenever
+    // the backend visitedStops lagged by one poll cycle (15–30 s).
+    const startSearchIdx = Math.max(0, baseIdx - 2);
+    const endSearchIdx = Math.min(stopsToShow.length, baseIdx + 5);
+
+    for (let i = startSearchIdx; i < endSearchIdx; i++) {
+      const s = stopsToShow[i];
+      const lat = Number(s.lat);
+      const lon = Number(s.lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        const d = haversineDistKm(activeBusCoord[0], activeBusCoord[1], lon, lat);
+        if (d < minD) { minD = d; idx = i; }
+      }
+    }
+    return idx;
+  }, [activeBusCoord, stopsToShow, visitedStops]);
+
+  const currentNextIdx = React.useMemo(() => {
+    let highestVisitedIdx = -1;
+    for (let i = 0; i < stopsToShow.length; i++) {
+      if (visitedStops[stopsToShow[i].name]) highestVisitedIdx = i;
+    }
+    let idx = highestVisitedIdx + 1;
+    
+    // Catch-up: If the bus is physically at or past a stop, advance the index
+    if (closestStopIdx !== -1 && closestStopIdx > idx) {
+      idx = closestStopIdx;
+    }
+    return Math.min(idx, stopsToShow.length);
+  }, [stopsToShow, visitedStops, closestStopIdx]);
+
+  const visitedCount = Math.max(Object.keys(visitedStops).length, currentNextIdx);
+  const nextStop = currentNextIdx >= 0 && currentNextIdx < stopsToShow.length ? stopsToShow[currentNextIdx] : null;
+
+  const computedLateMins = React.useMemo(() => {
+    // Only trust the delay the backend actually computed from live GPS, and only
+    // while we are genuinely tracking a live, running bus. Never infer a
+    // "presumed delay" from the wall clock — that is what produced fake
+    // "Delayed by Nm" labels on a trip that had not departed yet.
+    if (!isTrackingLive) return null;
+    return tripState?.late_by_minutes ?? null;
+  }, [isTrackingLive, tripState?.late_by_minutes]);
 
   const ROW_HEIGHT = 54;
   let stopProgress = 0;
   if (isActive && activeBusCoord && currentNextIdx > 0) {
     const fromStop = stopsToShow[currentNextIdx - 1];
     const toStop = stopsToShow[currentNextIdx];
-    if (Number.isFinite(fromStop?.lat) && Number.isFinite(fromStop?.lon) && Number.isFinite(toStop?.lat) && Number.isFinite(toStop?.lon)) {
-      const totalDist = haversineDistKm(fromStop.lon, fromStop.lat, toStop.lon, toStop.lat);
-      const coveredDist = haversineDistKm(fromStop.lon, fromStop.lat, activeBusCoord[0], activeBusCoord[1]);
+    if (Number.isFinite(Number(fromStop?.lat)) && Number.isFinite(Number(fromStop?.lon)) && Number.isFinite(Number(toStop?.lat)) && Number.isFinite(Number(toStop?.lon))) {
+      const totalDist = haversineDistKm(Number(fromStop.lon), Number(fromStop.lat), Number(toStop.lon), Number(toStop.lat));
+      const coveredDist = haversineDistKm(Number(fromStop.lon), Number(fromStop.lat), activeBusCoord[0], activeBusCoord[1]);
       stopProgress = totalDist > 0.001 ? Math.min(1, Math.max(0, coveredDist / totalDist)) : 0;
     }
   }
@@ -143,15 +223,15 @@ export default function RouteView() {
 
   const headingStatus = isActive && !tripName.includes('unscheduled') && nextStop
     ? `Heading to ${nextStop.name.split(',')[0]}`
-    : (locationName ? `At ${locationName}` : 'Locating...');
+    : (locationName ? locationName : 'Locating...');
 
   const etaText = (() => {
-    if (!eta || !isActive) return '\u2014';
+    if (!eta || !isActive || tripStatus === 'connecting') return '\u2014';
     if (eta.status === 'passed' || eta.status === 'deviated') return '\u2014';
     if (eta.eta_minutes != null) return `${Math.round(eta.eta_minutes)} min`;
     return '\u2014';
   })();
-  const speedText = (isLive && busPosition?.speed_kmh != null) ? `${Math.round(busPosition.speed_kmh)} km/h` : '\u2014';
+  const speedText = (isLive && tripStatus !== 'connecting' && busPosition?.is_live && busPosition?.speed_kmh != null) ? `${Math.round(busPosition.speed_kmh)} km/h` : '\u2014';
   const stopsDoneText = `${visitedCount}/${stopsToShow.length}`;
 
   const getTimelineEmptyMsg = () => {
@@ -173,26 +253,57 @@ export default function RouteView() {
     return `${timeString}, ${day} ${month}`;
   };
 
-  const globalDelayStatus = (lateMins != null && lateMins >= 1) ? 'late' : 'ontime';
+  const globalDelayStatus = (computedLateMins != null && computedLateMins >= 1) ? 'late' : 'ontime';
 
   const getSubtextStatus = () => {
     const status = tripState?.status ?? 'offline';
 
     if (!isOnline) {
-      if (tripStatus === 'completed') return 'Trip Completed';
-      return locationName ? `At ${locationName}` : 'Not in Service';
+      if (status === 'cancelled') return <span style={{ color: '#ef4444', fontWeight: 600 }}>Trip Cancelled {tripState?.cancellation_reason ? `(${tripState.cancellation_reason})` : ''}</span>;
+      return locationName ? locationName : 'Last Location';
     }
-    if (tripName.includes('morning') || tripName.includes('evening')) {
-      return locationName ? `At ${locationName}` : 'Live Tracking';
+
+    if (tripName.includes('unscheduled')) {
+      return <span style={{ color: '#1f2937', fontWeight: 700 }}>{locationName ? locationName : 'Unscheduled Trip'}</span>;
     }
-    if (tripName.includes('unscheduled')) return <span style={{ color: '#d97706', fontWeight: 700 }}>Unscheduled Trip (Live Tracking)</span>;
-    if (tripStatus === 'cancelled') return <span style={{ color: '#ef4444', fontWeight: 600 }}>Trip Cancelled {tripState?.cancellation_reason ? `(${tripState.cancellation_reason})` : ''}</span>;
-    const isWeekend = [0, 6].includes(new Date().getDay()) || status === 'weekend';
-    if (isWeekend) return 'Weekend (No Service)';
-    if (status === 'waiting') return 'Waiting for Service';
     
-    return locationName ? `At ${locationName}` : 'Not in Service';
+    return locationName ? locationName : 'Live Tracking';
   };
+
+  const displayHistoryCoords = React.useMemo(() => {
+    if (isIdleMode) return [];
+
+    // PRIMARY: Use the full server-side trail from trip_trace (DB).
+    // gps-ingestion writes every snapped GPS point here from trip start,
+    // so a user who opens the app mid-trip sees the complete route — not
+    // just from when they logged in. This is the fix for the "trail only
+    // shows from login" bug: the planned-route slice was winning over this
+    // and silently throwing away the real historical path.
+    if (routeHistory?.coords && routeHistory.coords.length > 0) {
+      return routeHistory.coords;
+    }
+
+    // FALLBACK: DB trail not yet fetched (first render before the HTTP poll
+    // returns, or trip_id not known yet). Show a temporary visual placeholder:
+    // the planned route sliced up to the bus's current position. It will be
+    // replaced by the real DB trail as soon as the first poll completes.
+    if (plannedCoords && plannedCoords.length > 0 && activeBusCoord) {
+      let minD = Infinity;
+      let closestIdx = -1;
+      for (let i = 0; i < plannedCoords.length; i++) {
+        const d = haversineDistKm(activeBusCoord[0], activeBusCoord[1], plannedCoords[i][0], plannedCoords[i][1]);
+        if (d < minD) {
+          minD = d;
+          closestIdx = i;
+        }
+      }
+      if (closestIdx !== -1) {
+        return plannedCoords.slice(0, closestIdx + 1);
+      }
+    }
+
+    return [];
+  }, [routeHistory?.coords, plannedCoords, activeBusCoord, isIdleMode]);
 
   useEffect(() => {
     if (viewMode !== 'route') return;
@@ -249,12 +360,36 @@ export default function RouteView() {
   // Only calculate the initial viewport once on mount (or when stops/bus load)
   const initialVp = React.useMemo(() => getMapViewport(stops, activeBusCoord), [stops.length > 0, !!activeBusCoord]);
 
-  // Auto-center whenever activeBusCoord changes, IF autoCenter is enabled
+  // Auto-center whenever activeBusCoord changes, IF autoCenter is enabled.
+  // While live, BusMapView recenters on the *animated* position every frame, so
+  // we skip the raw-point easeTo here to avoid fighting it (which caused the map
+  // to step between GPS pings). Offline (no animation feed) still eases here.
   useEffect(() => {
-    if (autoCenter && activeBusCoord && mapRef.current) {
+    if (autoCenter && activeBusCoord && mapRef.current && !isLive) {
       mapRef.current.easeTo({ center: activeBusCoord, duration: 600 });
     }
-  }, [activeBusCoord, autoCenter]);
+  }, [activeBusCoord, autoCenter, isLive]);
+
+  // Fix map size when switching to Map View.
+  // Do NOT re-enable autoCenter here — the user may have intentionally panned
+  // away and then switched tabs; forcing follow back on is what caused the
+  // "can't pan permanently" bug. A one-shot easeTo is enough to show the bus.
+  useEffect(() => {
+    if (viewMode === 'map' && mapRef.current) {
+      const timer = setTimeout(() => {
+        if (mapRef.current) {
+          mapRef.current.resize();
+          if (activeBusCoord) {
+            mapRef.current.easeTo({ center: activeBusCoord, zoom: 14, duration: 600 });
+          } else if (stops.length) {
+            const vp = getMapViewport(stops, null);
+            mapRef.current.easeTo({ center: vp.center, zoom: vp.zoom, duration: 600 });
+          }
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [viewMode]); // We purposefully only react to viewMode changes
 
   return (
     <>
@@ -265,14 +400,14 @@ export default function RouteView() {
       {/* --- Route View Header & Stats (Visible in both modes) --- */}
       <div style={{ padding: '12px 16px 0 16px', flexShrink: 0, position: 'relative', zIndex: 10, background: '#ffffff' }}>
         <div className="ios-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div className="ios-screen-title">Current Location</div>
+          <div className="ios-screen-title">{getSubtextStatus()}</div>
           {formatLastUpdated() && (
-            <div style={{ fontSize: '13px', color: 'var(--text-muted, #71717a)', fontWeight: 500 }}>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted, #71717a)', fontWeight: 500 }}>
               Last updated: {formatLastUpdated()}
             </div>
           )}
         </div>
-        <div className="ios-trip-subtext" style={{ marginBottom: isIdleMode ? '8px' : '6px' }}>{getSubtextStatus()}</div>
+        <div className="ios-trip-subtext" style={{ marginBottom: isIdleMode ? '8px' : '6px', fontSize: '12px' }}>Current Location</div>
 
         {/* Stats Card */}
         {!isIdleMode && (
@@ -369,18 +504,19 @@ export default function RouteView() {
               ) : (
                 <div className={`ios-timeline ios-timeline--status-${globalDelayStatus}`}>
                   {stopsToShow.map((stop, idx) => {
-                    const isVisited = !!visitedStops[stop.name];
+                    const isPassedGeographically = idx < currentNextIdx;
+                    const isVisited = !!visitedStops[stop.name] || isPassedGeographically;
                     const isCurrent = idx === currentNextIdx;
                     const scheduled = (direction === 'forward' ? stop.morning_time : stop.evening_time) || '';
                     const actualTime = arrivalTimes[stop.name] || null;
-                    const effectiveLateMins = (lateMins != null && lateMins <= -1 && !isCurrent) ? 0 : lateMins;
+                    const effectiveLateMins = (computedLateMins != null && computedLateMins <= -1) ? 0 : computedLateMins;
                     let displayTime = isVisited ? actualTime || scheduled : effectiveLateMins != null ? computeEstimatedTime(scheduled, effectiveLateMins) || scheduled : scheduled;
                     const isLast = idx === stopsToShow.length - 1;
                     let delayType = 'none';
-                    let statusSubtext = 'Scheduled';
+                    let statusSubtext = '';
 
-                    const isSkipped = !isVisited && isActive && stopsToShow.slice(idx + 1).some(s => visitedStops[s.name]);
-                    if (isSkipped) { statusSubtext = 'Skipped'; delayType = 'late'; }
+                    const isSkipped = (!visitedStops[stop.name] && isPassedGeographically) || (!isVisited && isActive && stopsToShow.slice(idx + 1).some(s => visitedStops[s.name]));
+                    if (isSkipped) { statusSubtext = 'Passed / Skipped'; delayType = 'late'; }
                     else if (isVisited) {
                       if (actualTime && scheduled) {
                         const perStopDiff = parseTimeToMinutes(actualTime) - parseTimeToMinutes(scheduled);
@@ -388,10 +524,11 @@ export default function RouteView() {
                         if (perStopDiff > 1) { delayType = 'late'; statusSubtext = `${action}  +${perStopDiff}m late`; }
                         else if (perStopDiff < -1) { delayType = 'ahead'; statusSubtext = `${action}  ${Math.abs(perStopDiff)}m early`; }
                         else { statusSubtext = `${action} on time`; }
-                      } else { statusSubtext = idx === 0 ? 'Departed' : 'Arrived'; }
-                    } else if (isOnline || (lateMins != null && (tripStatus === 'active' || tripStatus === 'connecting'))) {
+                      } else { statusSubtext = idx === 0 ? 'Departed' : 'Passed'; }
+                    } else if (isTrackingLive) {
                       let usedMl = false;
-                      if (mlEtas && mlEtas[stop.id] !== undefined && !isCurrent) {
+                      // Only use ML ETAs for future stops!
+                      if (!isPassedGeographically && mlEtas && mlEtas[stop.id] !== undefined) {
                         const now = new Date();
                         const currentMins = now.getHours() * 60 + now.getMinutes();
                         const scheduledMins = parseTimeToMinutes(scheduled);
@@ -399,18 +536,18 @@ export default function RouteView() {
                           const mlPredictedDelay = Math.round(currentMins + mlEtas[stop.id] - scheduledMins);
                           displayTime = computeEstimatedTime(scheduled, mlPredictedDelay) || scheduled;
                           if (mlPredictedDelay > 1) { delayType = 'late'; statusSubtext = `Delayed by ${mlPredictedDelay}m`; }
-                          else if (mlPredictedDelay < -1) { delayType = 'ahead'; statusSubtext = `On time`; }
+                          else if (mlPredictedDelay < -1) { delayType = 'ahead'; statusSubtext = `${Math.abs(mlPredictedDelay)}m early`; }
                           else { delayType = 'ontime'; statusSubtext = `On time`; }
                           usedMl = true;
                         }
                       }
                       if (!usedMl) {
-                        if (lateMins >= 1) delayType = 'late';
-                        else if (lateMins <= -1) delayType = isCurrent ? 'ahead' : 'ontime';
+                        if (effectiveLateMins >= 1) delayType = 'late';
+                        else if (effectiveLateMins <= -1) delayType = 'ahead';
                         else delayType = 'ontime';
                         
-                        if (delayType === 'late') statusSubtext = `Delayed by ${lateMins}m`;
-                        else if (delayType === 'ahead') statusSubtext = `On time`;
+                        if (delayType === 'late') statusSubtext = `Delayed by ${effectiveLateMins}m`;
+                        else if (delayType === 'ahead') statusSubtext = `${Math.abs(effectiveLateMins)}m early`;
                         else statusSubtext = 'On time';
                       }
                     }
@@ -419,7 +556,7 @@ export default function RouteView() {
                       <div key={stop.id || idx} id={isCurrent ? 'active-stop-row' : undefined} className="ios-timeline-row">
                         <div className="ios-time-col">
                           <div className="ios-sched-time">{scheduled}</div>
-                          {isVisited || isOnline || (lateMins != null && (tripStatus === 'active' || tripStatus === 'connecting')) ? (
+                          {isVisited || isTrackingLive ? (
                             <div className={`ios-live-time ${delayType === 'late' ? 'ios-time-late' : ''}`}>{displayTime}</div>
                           ) : (<div className="ios-live-time-muted">&mdash;</div>)}
                         </div>
@@ -435,7 +572,7 @@ export default function RouteView() {
                         </div>
                         <div className="ios-stop-col">
                           <div className={`ios-stop-name ${isCurrent ? 'ios-stop-name-current' : ''} ${isVisited ? 'ios-stop-name-visited' : ''}`}>{stop.name}</div>
-                          <div className={`ios-stop-subtext ${isCurrent ? 'ios-stop-subtext-current' : ''} ${delayType === 'late' ? 'ios-stop-subtext-late' : ''} ${(delayType === 'ahead' || delayType === 'ontime') && !isVisited && isOnline && !isCurrent ? 'ios-stop-subtext-ahead' : ''}`}>{statusSubtext}</div>
+                          {statusSubtext && <div className={`ios-stop-subtext ${isCurrent ? 'ios-stop-subtext-current' : ''} ${delayType === 'late' ? 'ios-stop-subtext-late' : ''} ${(delayType === 'ahead' || delayType === 'ontime') && !isVisited && isTrackingLive && !isCurrent ? 'ios-stop-subtext-ahead' : ''}`}>{statusSubtext}</div>}
                         </div>
                       </div>
                     );
@@ -451,7 +588,7 @@ export default function RouteView() {
         </div>
       </div>
 
-      {/* --- Map View Panel (cached — always mounted, display-toggled) --- */}
+      {/* --- Map View Panel (mounted on first open, then display-toggled) --- */}
       <div
         style={{
           display: viewMode === 'map' ? 'block' : 'none',
@@ -461,19 +598,31 @@ export default function RouteView() {
           zIndex: 1,
         }}
       >
-        <BusMapView
-          interactive={true}
-          center={initialVp.center}
-          zoom={initialVp.zoom}
-          busCoord={activeBusCoord}
-          isLive={isLive}
-          headingStatus={headingStatus}
-          stops={isIdleMode ? [] : stops}
-          plannedCoords={isIdleMode ? [] : plannedCoords}
-          onStopClick={(s) => setSelectedStop(s)}
-          onMapLoad={(map) => { mapRef.current = map; map.on('dragstart', () => setAutoCenter(false)); }}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-        />
+        {mapMounted && (
+          <Suspense fallback={null}>
+            <BusMapView
+              interactive={true}
+              center={initialVp.center}
+              zoom={initialVp.zoom}
+              busCoord={activeBusCoord}
+              isLive={isLive}
+              isActiveTrip={isActiveTrip && !isUnscheduled}
+              autoCenter={autoCenter}
+              onAutoCenterChange={setAutoCenter}
+              headingStatus={headingStatus}
+              stops={isIdleMode ? [] : stops}
+              plannedCoords={isIdleMode ? [] : plannedCoords}
+              routeHistoryCoords={displayHistoryCoords}
+              onStopClick={(s) => setSelectedStop(s)}
+              onMapLoad={(map) => { 
+                mapRef.current = map; 
+                map.on('dragstart', () => setAutoCenter(false)); 
+                recenter();
+              }}
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            />
+          </Suspense>
+        )}
 
         {/* Map Controls */}
         <div className="map-controls" style={{ bottom: selectedStop ? '240px' : '24px', position: 'absolute', right: '16px', zIndex: 10 }}>

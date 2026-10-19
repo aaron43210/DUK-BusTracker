@@ -3,8 +3,7 @@
    Design system: tokens, typography, layout shell, all components
     */
 
-/*  Google Font: Inter  */
-/* Loaded via <link> in index.html for performance */
+/*  Typography: native system font stack (no web-font download)  */
 
 /*  CSS Design Tokens  */
 :root {
@@ -54,7 +53,7 @@
   --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.12);
 
   /* Typography */
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
   /* Transitions */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -112,8 +111,11 @@ body.theme-liquid-glass {
 }
 
 .theme-liquid-glass input,
-.theme-liquid-glass textarea {
+.theme-liquid-glass textarea,
+.theme-liquid-glass select {
   font-family: var(--font);
+  /* >=16px stops iOS from zooming the page when a field is focused. */
+  font-size: 16px;
 }
 
 /*  App Shell  */
@@ -1257,9 +1259,9 @@ body.theme-liquid-glass {
   left: 115px;
   /* time-col(75px) + track-col center(40px/2) + container padding(20px) */
   transform: translateX(-50%) translateY(-50%);
-  width: 36px;
-  height: 36px;
-  border-radius: 18px;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
   background: var(--theme-bg);
   display: flex;
   align-items: center;
@@ -1290,9 +1292,9 @@ body.theme-liquid-glass {
 }
 
 .theme-liquid-glass .ios-bus-badge-circle {
-  width: 28px;
-  height: 28px;
-  border-radius: 14px;
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
   background: var(--theme-color);
   display: flex;
   align-items: center;
@@ -2425,6 +2427,8 @@ body.theme-liquid-glass {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  /* Lift the bottom sheet above the on-screen keyboard. */
+  padding-bottom: var(--kb);
 }
 
 .theme-liquid-glass .otp-backdrop {
@@ -2697,8 +2701,8 @@ body.theme-liquid-glass {
   inset: 0;
   z-index: 99999;
   background-color: #020b22;
-  background-image: url('/splash_screen.png');
-  background-size: 100% 100%;
+  background-image: url('/splash_screen.webp');
+  background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
   display: flex;
@@ -2707,13 +2711,18 @@ body.theme-liquid-glass {
   justify-content: center;
 }
 
+/* Set by index.html for logged-out visitors (see the gate script there). */
+.theme-liquid-glass.splash-plain .splash-screen {
+  background-image: none;
+}
+
 .theme-liquid-glass .splash-overlay {
   position: absolute;
   inset: 0;
   background: linear-gradient(to bottom,
-      rgba(1, 12, 42, 0.45),
-      rgba(1, 18, 55, 0.1) 45%,
-      rgba(1, 9, 30, 0.65));
+      rgba(1, 12, 42, 0.15),
+      rgba(1, 18, 55, 0.05) 45%,
+      rgba(1, 9, 30, 0.25));
   z-index: 1;
 }
 
@@ -2935,6 +2944,9 @@ body.theme-liquid-glass {
   justify-content: center;
   z-index: 100000;
   padding: 24px;
+  /* Keep the modal centred in the space above the keyboard; allow scroll. */
+  padding-bottom: calc(24px + var(--kb));
+  overflow-y: auto;
 }
 
 .theme-liquid-glass .modal-content {
@@ -2946,6 +2958,9 @@ body.theme-liquid-glass {
   position: relative;
   box-shadow: var(--shadow-lg);
   animation: modalPop var(--dur-normal) var(--ease) forwards;
+  /* Tall forms scroll internally instead of overflowing behind the keyboard. */
+  max-height: calc(100dvh - var(--sat) - var(--kb) - 48px);
+  overflow-y: auto;
 }
 
 @keyframes modalPop {
@@ -3235,7 +3250,7 @@ body.theme-liquid-glass {
   color: #6b7280;
   font-size: 14px;
   font-weight: 600;
-  font-family: var(--font-primary, -apple-system, BlinkMacSystemFont, 'Inter', sans-serif);
+  font-family: var(--font-primary, -apple-system, BlinkMacSystemFont, sans-serif);
   cursor: pointer;
   letter-spacing: -0.2px;
   transition:
@@ -3332,10 +3347,32 @@ body.theme-liquid-glass {
 
 /* Topbar */
 .theme-liquid-glass .topbar {
-  backdrop-filter: blur(32px) saturate(200%) !important;
-  -webkit-backdrop-filter: blur(32px) saturate(200%) !important;
-  background: rgba(255, 255, 255, 0.55) !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: transparent !important;
+  border-bottom: none !important;
+  -webkit-transform: translate3d(0, 0, 0);
+  transform: translate3d(0, 0, 0);
+}
+
+.theme-liquid-glass .topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+@supports (-webkit-touch-callout: none) {
+  /* iOS specific fallback to prevent full-screen backdrop-filter bleed bug */
+  .theme-liquid-glass .topbar::before {
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    background: rgba(255, 255, 255, 0.75);
+  }
 }
 
 /* Auth Cards & Generic Cards */

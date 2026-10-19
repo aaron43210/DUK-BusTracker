@@ -6,7 +6,9 @@ Streams consumed:
   notifications.proximity  — bus approaching a user's stop
   notifications.late_eta   — bus running > 10 min late
   notifications.trip_started — trip just moved from scheduled → on_trip
-  notifications.scheduled  — pre-cancel reminders scheduled by admin
+
+(Pre-scheduled reminders are dispatched directly via Celery by
+scheduled_dispatcher.py — there is no "notifications.scheduled" stream.)
 """
 import asyncio
 import logging
@@ -15,12 +17,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 from libs.duk_common.redis_client import get_redis, close_redis
-from libs.duk_common.events import EventBus
+from libs.duk_common.events import EventBus, ProximityAlertEvent, EtaLateEvent, TripStartedEvent
 
 from tasks import send_fcm_notification_task, create_in_app_notification_task
 from database_local import AsyncSessionLocal
-from models_local import User, InAppNotification
-from sqlalchemy import select
+from libs.duk_common.models import User
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,150 +29,131 @@ logger = logging.getLogger(__name__)
 
 #  Handlers 
 
-async def handle_auth_otp(event_data: dict):
-    logger.info("[NOTIF] Received auth.otp event: %s", {k: v for k, v in event_data.items() if k != 'otp'})
-    email = event_data.get("email")
-    name = event_data.get("name")
-    otp = event_data.get("otp")
 
-    if not email or not otp:
-        return
 
-    # Use asyncio.to_thread to run the synchronous SMTP function in the background
-    # We dynamically import it since event_consumer runs in the shared container environment
-    import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../auth-service"))
-    from email_helper import send_otp_email
+async def handle_proximity_alert(event: ProximityAlertEvent):
+    """Handle proximity alerts for buses.
 
+    Sends FCM notifications to users whose stops are approaching.
+
+    Args:
+        event: ProximityAlertEvent containing alert information.
+
+    Raises:
+        Exception: Logs any errors encountered during processing.
+    """
     try:
-        await asyncio.to_thread(send_otp_email, email, name, otp)
+        logger.info("[NOTIF] Proximity alert: %s", event)
+        alert_type = event.alert_type
+        tokens     = event.user_tokens
+        stop_name  = event.stop_name or "your stop"
+        trip_id    = event.trip_id
+
+        if not tokens:
+            return
+
+        if alert_type == "boarding":
+            title = "Bus Approaching!"
+            body  = f"Your bus is nearing {stop_name}. Please head to the stop and be ready to board."
+        else:
+            title = "Destination Approaching!"
+            body  = f"Your bus is nearing {stop_name}. Please gather your belongings and prepare to alight."
+
+        send_fcm_notification_task.delay(tokens, title, body, {"trip_id": str(trip_id)})
     except Exception as e:
-        logger.error("[NOTIF] Failed to send OTP email in worker: %s", e)
+        logger.exception("[NOTIF] handle_proximity_alert crashed: %s", e)
 
 
-async def handle_proximity_alert(event_data: dict):
-    logger.info("[NOTIF] Proximity alert: %s", event_data)
-    alert_type = event_data.get("alert_type")
-    tokens     = event_data.get("user_tokens", [])
-    stop_name  = event_data.get("stop_name", "your stop")
-    trip_id    = event_data.get("trip_id")
+async def handle_late_eta(event: EtaLateEvent):
+    """Handle late ETA alerts for buses.
 
-    if not tokens:
-        return
+    Sends FCM notifications to users when a bus is running late.
 
-    if alert_type == "boarding":
-        title = "Bus is Approaching!"
-        body  = f"Your bus is nearing {stop_name}. Please be ready to board."
-    else:
-        title = "Destination Approaching!"
-        body  = f"Your bus is nearing {stop_name}. Get ready to alight."
+    Args:
+        event: EtaLateEvent containing alert information.
 
-    send_fcm_notification_task.delay(tokens, title, body, {"trip_id": str(trip_id)})
+    Raises:
+        Exception: Logs any errors encountered during processing.
+    """
+    try:
+        logger.info("[NOTIF] ETA late event: %s", event)
+        tokens      = event.user_tokens
+        delay_min   = event.delay_min
+        arrival_str = event.arrival_str
+        trip_id     = event.trip_id
 
+        if not tokens:
+            return
 
-async def handle_late_eta(event_data: dict):
-    logger.info("[NOTIF] ETA late event: %s", event_data)
-    tokens      = event_data.get("user_tokens", [])
-    delay_min   = event_data.get("delay_min", 0)
-    arrival_str = event_data.get("arrival_str", "")
-    trip_id     = event_data.get("trip_id")
-
-    if not tokens:
-        return
-
-    title = "Bus Running Late"
-    body  = f"The bus will be approximately {int(delay_min)} minutes late. Expected at {arrival_str}."
-    send_fcm_notification_task.delay(tokens, title, body, {"trip_id": str(trip_id), "type": "late_eta"})
+        title = "Bus Delayed"
+        body  = f"Your bus is running ~{int(delay_min)} mins late due to traffic. New ETA is {arrival_str}."
+        send_fcm_notification_task.delay(tokens, title, body, {"trip_id": str(trip_id), "type": "late_eta"})
+    except Exception as e:
+        logger.exception("[NOTIF] handle_late_eta crashed: %s", e)
 
 
-async def handle_trip_started(event_data: dict):
-    """Fan-out trip-started notification to ALL verified users."""
-    logger.info("[NOTIF] Trip started: %s", event_data)
-    trip_id   = event_data.get("trip_id")
-    direction = event_data.get("direction", "forward")
+async def handle_trip_started(event: TripStartedEvent):
+    """Handle trip-started events.
 
-    dir_str = "Morning" if direction == "forward" else "Evening"
-    title   = f"{dir_str} Bus Trip Started"
-    body    = "The bus has started its journey. Track it live in the app."
+    Sends push notifications only to users who have notify_trip_started enabled.
+    Always creates an in-app notification for all users regardless of this setting.
 
-    async with AsyncSessionLocal() as db:
-        # Fetch all verified users who have notifications enabled and have a device token
-        result = await db.execute(
-            select(User).where(
-                User.verified == True,
-                User.notifications_on != False,
-                User.device_token.isnot(None),
-            )
-        )
-        users  = result.scalars().all()
-        tokens = [u.device_token for u in users if u.device_token]
+    Args:
+        event: TripStartedEvent containing trip information.
 
-        # Write one InAppNotification row (broadcast — no specific user_id)
-        create_in_app_notification_task.delay(
-            None,   # user_id=None means broadcast
-            title,
-            body,
-            "trip_started",
-        )
+    Raises:
+        Exception: Logs any errors encountered during processing.
+    """
+    try:
+        logger.info("[NOTIF] Trip started: %s", event)
+        trip_id   = event.trip_id
+        direction = event.direction
 
-    if tokens:
-        # Chunk into batches of 500 (Firebase limit)
-        for i in range(0, len(tokens), 500):
-            chunk = tokens[i:i + 500]
-            send_fcm_notification_task.delay(chunk, title, body, {"trip_id": str(trip_id), "type": "trip_started"})
+        dir_str = "Morning" if direction == "forward" else "Evening"
+        title   = f"{dir_str} Bus Trip Started!"
+        body    = "The bus is now on the move. Tap to track it live in the app."
 
-    logger.info("[NOTIF] Trip-started FCM dispatched to %d devices", len(tokens))
+        from libs.duk_common.notification_helpers import get_notification_tokens
+        async with AsyncSessionLocal() as db:
+            # Only send push to users who have trip-started notifications enabled
+            tokens = await get_notification_tokens(db, pref_column=User.notify_trip_started)
 
+            # In-app notification is always created, regardless of push preference
+            create_in_app_notification_task.delay(None, title, body, "trip_started")
 
-async def handle_scheduled_notification(event_data: dict):
-    """Fire a pre-cancel reminder that was scheduled by the admin service."""
-    logger.info("[NOTIF] Scheduled notification due: %s", event_data)
-    notif_id = event_data.get("notif_id")
-    title    = event_data.get("title", "Trip Update")
-    body     = event_data.get("body", "")
-    trip_id  = event_data.get("trip_id")
+        if tokens:
+            for i in range(0, len(tokens), 500):
+                chunk = tokens[i:i + 500]
+                send_fcm_notification_task.delay(chunk, title, body, {"trip_id": str(trip_id), "type": "trip_started"})
 
-    # Fetch tokens for all verified, notifications-on users
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(User).where(
-                User.verified == True,
-                User.notifications_on != False,
-                User.device_token.isnot(None),
-            )
-        )
-        users  = result.scalars().all()
-        tokens = [u.device_token for u in users if u.device_token]
-
-    if tokens:
-        for i in range(0, len(tokens), 500):
-            send_fcm_notification_task.delay(tokens[i:i+500], title, body, {"trip_id": str(trip_id)})
-
-    # Write in-app record
-    create_in_app_notification_task.delay(None, title, body, "scheduled_alert")
-    logger.info("[NOTIF] Scheduled notif %s dispatched to %d devices", notif_id, len(tokens))
+        logger.info("[NOTIF] Trip-started FCM dispatched to %d devices", len(tokens))
+    except Exception as e:
+        logger.exception("[NOTIF] handle_trip_started crashed: %s", e)
 
 
-#  Entry Point 
+
+#  Entry Point
 
 async def main():
     redis = await get_redis()
     bus   = EventBus(redis)
     logger.info("[NOTIF] Starting notification event consumer (all streams)...")
 
+    # Use process PID to create a unique consumer ID per instance.
+    # This prevents duplicate processing if multiple instances run simultaneously.
+    consumer_id = f"worker-{os.getpid()}"
+
     streams = [
-        ("notifications.proximity",   "notif-proximity-group",  "worker-1", handle_proximity_alert),
-        ("notifications.late_eta",    "notif-late-eta-group",   "worker-1", handle_late_eta),
-        ("notifications.trip_started","notif-trip-start-group", "worker-1", handle_trip_started),
-        ("notifications.scheduled",   "notif-scheduled-group",  "worker-1", handle_scheduled_notification),
-        ("auth.otp",                  "notif-auth-otp-group",   "worker-1", handle_auth_otp),
+        ("notifications.proximity",    "notif-proximity-group",  consumer_id, handle_proximity_alert, ProximityAlertEvent),
+        ("notifications.late_eta",     "notif-late-eta-group",   consumer_id, handle_late_eta, EtaLateEvent),
+        ("notifications.trip_started", "notif-trip-start-group", consumer_id, handle_trip_started, TripStartedEvent),
     ]
 
     tasks = [
         asyncio.create_task(
-            bus.consume(stream=s, group=g, consumer=c, handler=h, batch_size=50)
+            bus.consume(stream=s, group=g, consumer=c, handler=h, batch_size=50, model_cls=cls)
         )
-        for s, g, c, h in streams
+        for s, g, c, h, cls in streams
     ]
 
     try:
