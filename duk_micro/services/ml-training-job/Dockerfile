@@ -7,10 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm 
 COPY services/ml-training-job/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared library
-COPY libs/ /app/libs/
-ENV PYTHONPATH="${PYTHONPATH}:/app/libs"
+RUN useradd -m appuser
+USER appuser
 
-COPY services/ml-training-job/ .
+# Copy shared library
+COPY --chown=appuser:appuser libs/ /app/libs/
+ENV PYTHONPATH="/app"
+
+COPY --chown=appuser:appuser services/ml-training-job/ .
 
 CMD ["python", "train_job.py"]

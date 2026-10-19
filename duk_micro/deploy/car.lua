@@ -17,10 +17,12 @@ function setup()
   return {
     properties = {
       max_speed_for_map_matching      = 180/3.6, -- 180kmph -> m/s
+      -- Route by real travel duration. 'routability' rewarded low-class side
+      -- streets and produced trails that cut through small roads; 'duration'
+      -- keeps the bus on the faster main roads it actually travels.
+      weight_name                     = 'duration',
       -- For routing based on duration, but weighted for preferring certain roads
-      weight_name                     = 'routability',
-      -- For shortest duration without penalties for accessibility
-      -- weight_name                     = 'duration',
+      -- weight_name                     = 'routability',
       -- For shortest distance without penalties for accessibility
       -- weight_name                     = 'distance',
       process_call_tagless_node      = false,
@@ -32,7 +34,7 @@ function setup()
 
     default_mode              = mode.driving,
     default_speed             = 10,
-    oneway_handling           = false,
+    oneway_handling           = true,
     side_road_multiplier      = 0.8,
 
     turn_penalty              = 7.5,
@@ -154,15 +156,15 @@ function setup()
     speeds = Sequence {
       highway = {
         motorway        = 70,
-        motorway_link   = 45,
+        motorway_link   = 5,
         trunk           = 65,
-        trunk_link      = 40,
+        trunk_link      = 5,
         primary         = 50,
-        primary_link    = 35,
+        primary_link    = 5,
         secondary       = 45,
-        secondary_link  = 30,
+        secondary_link  = 5,
         tertiary        = 40,
-        tertiary_link   = 25,
+        tertiary_link   = 5,
         unclassified    = 30,
         residential     = 25,
         living_street   = 15,
@@ -464,13 +466,11 @@ function process_way(profile, way, result, relations)
     -- access tags, e.g: motorcar, motor_vehicle, vehicle
     WayHandlers.access,
 
-    -- Enable full bidirectional routing on all roads so bus GPS tracking is never blocked by median dividers
-    function(profile, way, result, data)
-      result.forward_mode = mode.driving
-      result.backward_mode = mode.driving
-    end,
-
-
+    -- (Removed) A handler here used to force result.forward_mode =
+    -- result.backward_mode = mode.driving on every way, defeating oneway_handling
+    -- and letting the router traverse one-way streets/dividers the wrong way — a
+    -- major cause of trails cutting through small roads. Oneway handling now
+    -- governs direction normally (oneway_handling = true above).
 
     -- check a road's destination
     WayHandlers.destinations,

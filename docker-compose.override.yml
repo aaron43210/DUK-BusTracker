@@ -1,0 +1,38 @@
+# =============================================================================
+# LOCAL DEV override — auto-merged by `docker compose` on top of
+# docker-compose.yml. Do NOT deploy this to the server: it disables TLS and
+# re-exposes internal ports for debugging. Production uses docker-compose.prod.yml.
+#
+# Quick start:   ./dev-up.sh      (recommended — sets the env vars for you)
+# Or manually:   FIREBASE_CREDS_PATH=./duk_micro/firebase_creds.local.json \
+#                docker compose up --build
+# =============================================================================
+services:
+  postgres:
+    ports:
+      - "5432:5432"   # inspect the DB locally (psql / a GUI client)
+
+  core-api:
+    environment:
+      # Point at the bundled Postgres service. Overrides the (blank) DATABASE_URL
+      # in duk_micro/.env so no real secret is needed for local dev. User/password/
+      # db here must match the postgres service (duk / dukpassword / duk_bus).
+      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres:5432/duk_bus
+    ports:
+      - "8000:8000"   # hit the API directly, bypassing the gateway
+
+  background-workers:
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://duk:dukpassword@postgres:5432/duk_bus
+
+  gateway:
+    # Plain HTTP only for local: no Let's Encrypt (there is no public domain here),
+    # and publish on 8080 so it needs no privileged port and won't clash with other
+    # apps. The API is also reachable directly on :8000 (see core-api above).
+    command: !override
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports: !override
+      - "8080:80"

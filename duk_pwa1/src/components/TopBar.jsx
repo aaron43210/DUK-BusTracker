@@ -29,8 +29,8 @@ export default function TopBar({ onHamburger, onBack, onNotification, showBack =
         </div>
       ) : (
         <div className="topbar__center">
-          <img src="/duk-logo.png" alt="DUK Bus Tracker" className="topbar__logo-img" />
-          <img src="/canlab.png" alt="CanLab" className="topbar__logo-img" style={{ transform: 'scale(0.9)' }} />
+          <img src="./duk-logo.webp" alt="DUK Bus Tracker" className="topbar__logo-img" width={285} height={136} />
+          <img src="./canlab.webp" alt="CanLab" className="topbar__logo-img" width={348} height={196} style={{ transform: 'scale(0.9)' }} />
         </div>
       )}
 

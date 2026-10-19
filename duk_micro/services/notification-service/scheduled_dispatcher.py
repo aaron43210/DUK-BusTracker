@@ -11,13 +11,10 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.." ))
-from libs.duk_common.redis_client import close_redis
-
 from database_local import AsyncSessionLocal
-from models_local import ScheduledNotification
+from libs.duk_common.models import ScheduledNotification
 from tasks import send_fcm_notification_task, create_in_app_notification_task
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,15 +23,18 @@ POLL_INTERVAL_S = 60
 
 
 async def dispatch_due_notifications():
-    """Check scheduled_notifications for rows where send_at <= now and fire them."""
+    """Check scheduled_notifications for rows where send_at <= now and fire them.
+
+    Raises:
+        Exception: Logs any errors encountered during processing.
+    """
     now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(ScheduledNotification).where(
                 ScheduledNotification.send_at <= now,
-                ScheduledNotification.sent == False,
-                ScheduledNotification.cancelled == False,
+                ScheduledNotification.status == "pending",
             )
         )
         due = result.scalars().all()
@@ -44,19 +44,16 @@ async def dispatch_due_notifications():
 
         logger.info("[SCHEDULER] Dispatching %d due notifications", len(due))
 
-        # Fetch all verified user tokens once
-        from models_local import User
-        tokens_result = await db.execute(
-            select(User.device_token).where(
-                User.verified == True,
-                User.notifications_on != False,
-                User.device_token.isnot(None),
-            )
-        )
-        tokens = [row[0] for row in tokens_result.all() if row[0]]
+        from libs.duk_common.notification_helpers import get_notification_tokens
+        from libs.duk_common.models import User
+        # Respect the per-user admin-broadcast opt-out, consistent with the
+        # notifications.* stream consumer (handle_scheduled_notification used
+        # User.notify_admin_broadcasts). Without this, pre-cancel reminders were
+        # pushed even to users who had turned admin broadcasts off.
+        tokens = await get_notification_tokens(db, pref_column=User.notify_admin_broadcasts)
 
         for notif in due:
-            notif.sent = True
+            notif.status = "sent"
             if tokens:
                 for i in range(0, len(tokens), 500):
                     send_fcm_notification_task.delay(tokens[i:i+500], notif.title, notif.body, {"trip_id": str(notif.trip_id or "")})

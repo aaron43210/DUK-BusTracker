@@ -9,11 +9,13 @@ This file defines:
 
 Flow example:
   gps-ingestion  → publishes "gps.snapped"  → trip-lifecycle consumes it
-  admin-service  → publishes "trip.status"  → notification-service consumes it
+
+Note: "trip.status" is published (admin-service, trip-lifecycle) for history/audit
+but is not currently consumed by any service.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal, Type
 import json
 import asyncio
 import logging
@@ -22,108 +24,57 @@ from redis.asyncio import Redis
 logger = logging.getLogger(__name__)
 
 
-#  GPS Events 
-
-class GpsRawEvent(BaseModel):
-    """
-    A raw GPS coordinate as it arrives from the hardware device.
-    Published immediately before filtering or road-snapping.
-
-    Fields:
-        device_id   - Which bus sent this (default: "bus-1")
-        lat         - Latitude in decimal degrees (e.g., 8.5581)
-        lon         - Longitude in decimal degrees (e.g., 76.9061)
-        speed_kmh   - Speed in km/h (None if device didn't report it)
-        server_time - When the server received this point (UTC)
-    """
-    device_id: str = "bus-1"
-    lat: float
-    lon: float
-    speed_kmh: Optional[float] = None
-    server_time: datetime
-
+#  GPS Events
 
 class GpsSnappedEvent(BaseModel):
     """
     A GPS coordinate after it has been filtered, cleaned, and snapped to the
     nearest road segment by OSRM.
-
-    This is what gets stored in the database and broadcast to PWA clients.
-
-    Fields:
-        device_id        - Which bus sent this
-        lat, lon         - Road-snapped coordinates (slightly adjusted from raw GPS)
-        speed_kmh        - Speed in km/h
-        server_time      - When the server received the original raw point (UTC)
-        should_broadcast - True if this point is far enough from the last to be worth sending
-        location_name    - Human-readable area name (e.g., "Pongumoodu") from reverse geocoding
     """
     device_id: str
-    lat: float
-    lon: float
-    speed_kmh: Optional[float] = None
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    speed_kmh: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     server_time: datetime
     should_broadcast: bool
     location_name: Optional[str] = None
+    osrm_path: Optional[list] = None
+    route_s: Optional[float] = None   # metres travelled along the planned route (linear reference)
+    off_route: bool = False           # True when the bus left the planned corridor (OSRM-snapped)
 
 
-class PowerEvent(BaseModel):
-    """
-    Fired when the bus GPS device powers on or loses power.
-
-    Fields:
-        event       - "POWER_LOST" or "POWER_RESTORE"
-        server_time - When the server received this event (UTC)
-    """
-    event: str
-    server_time: datetime
-
-
-#  Trip Events 
+#  Trip Events
 
 class TripStartedEvent(BaseModel):
     """
     Fired when admin marks a trip as started.
-
-    Fields:
-        trip_id   - Database ID of the trip row
-        direction - "forward" (morning, DUK→Trivandrum) or "reverse" (evening, Trivandrum→DUK)
     """
-    trip_id: int
-    direction: str
+    trip_id: int = Field(gt=0)
+    direction: Literal["forward", "reverse", "unscheduled", "unknown"]
 
 
 class TripStatusEvent(BaseModel):
     """
-    Fired when a trip's status changes (e.g., scheduled → on_trip → completed).
-
-    Fields:
-        trip_id   - Database ID of the trip row
-        status    - One of: "scheduled", "on_trip", "late", "completed", "cancelled"
-        direction - "forward" or "reverse"
+    Fired when a trip's status changes.
     """
-    trip_id: int
-    status: str
-    direction: str
+    trip_id: int = Field(gt=0)
+    status: Literal["scheduled", "on_trip", "late", "completed", "cancelled"]
+    direction: Literal["forward", "reverse", "unscheduled", "unknown"]
 
 
 class TripStatusChangedEvent(BaseModel):
     """
     Richer version of TripStatusEvent that includes delay and cancellation info.
-    Used for admin-triggered updates that need to notify passengers.
 
-    Fields:
-        trip_id              - Database ID of the trip row
-        status               - New status
-        direction            - Trip direction
-        late_by_minutes      - How many minutes late (None if on time)
-        cancellation_reason  - Reason shown to passengers if cancelled
-        message              - Optional admin message
+    `status` accepts the admin-facing values too ("active", "stop_change"), not
+    just the lifecycle states, because the admin dashboard publishes these via
+    this event. Omitting them previously made the event constructor raise, which
+    silently dropped the realtime broadcast for a "Stop Change" action.
     """
-    trip_id: int
-    status: str
-    direction: str
-    late_by_minutes: Optional[int] = None
+    trip_id: int = Field(gt=0)
+    status: Literal["scheduled", "on_trip", "active", "late", "stop_change", "completed", "cancelled"]
+    direction: Literal["forward", "reverse", "unscheduled", "unknown"]
+    late_by_minutes: Optional[int] = Field(default=None, ge=0)
     cancellation_reason: Optional[str] = None
     message: Optional[str] = None
 
@@ -133,124 +84,92 @@ class TripStatusChangedEvent(BaseModel):
 class ProximityAlertEvent(BaseModel):
     """
     Fired when the bus is approaching a passenger's boarding or destination stop.
-
-    Fields:
-        trip_id     - Active trip ID
-        stop_id     - The stop the bus is approaching
-        stop_name   - Human-readable stop name (e.g., "Kazhakuttam")
-        alert_type  - "boarding" (bus approaching your pickup) or "destination" (approaching your drop-off)
-        user_tokens - FCM device tokens of passengers to notify
     """
-    trip_id: int
-    stop_id: int
+    trip_id: int = Field(gt=0)
+    stop_id: int = Field(gt=0)
     stop_name: str = ""
-    alert_type: str
-    user_tokens: List[str]
+    alert_type: Literal["boarding", "destination"]
+    user_tokens: List[str] = Field(default_factory=list)
 
 
 class EtaLateEvent(BaseModel):
     """
     Fired when ETA calculations detect the bus will be significantly late.
-
-    Fields:
-        trip_id     - Active trip ID
-        delay_min   - How many minutes behind schedule
-        eta_min     - Estimated minutes until arrival at target stop
-        arrival_str - Human-readable arrival time (e.g., "07:42 PM")
-        direction   - Trip direction
-        user_tokens - FCM device tokens of affected passengers
     """
-    trip_id: int
-    delay_min: float
-    eta_min: float
+    trip_id: int = Field(gt=0)
+    delay_min: float = Field(ge=0)
+    eta_min: float = Field(ge=0)
     arrival_str: str
-    direction: str = ""
-    user_tokens: List[str] = []
-
-
-class ScheduledNotificationDueEvent(BaseModel):
-    """
-    Fired by the notification dispatcher when a pre-scheduled reminder is due.
-    Example: "Your bus departs in 30 minutes" sent automatically.
-
-    Fields:
-        notif_id - Database ID of the scheduled notification
-        trip_id  - Related trip ID
-        title    - Push notification title
-        body     - Push notification body text
-    """
-    notif_id: int
-    trip_id: int
-    title: str
-    body: str
+    direction: Literal["forward", "reverse", "unscheduled", "unknown"] = "unknown"
+    user_tokens: List[str] = Field(default_factory=list)
 
 
 class UserPreferencesUpdatedEvent(BaseModel):
     """
     Fired when a passenger updates their stop preferences or notification settings.
-    trip-lifecycle service listens for this to refresh its in-memory cache.
-
-    Fields:
-        user_id                   - Passenger's user ID
-        proximity_alert_enabled   - Whether to send proximity alerts
-        boarding_alert_stop_id    - Stop to watch for boarding alerts
-        destination_alert_stop_id - Stop to watch for destination alerts
-        notifications_on          - Master switch for all notifications
-        device_token              - FCM device token for push notifications
     """
     user_id: str
     proximity_alert_enabled: Optional[bool] = None
-    boarding_alert_stop_id: Optional[int] = None
-    destination_alert_stop_id: Optional[int] = None
+    boarding_alert_stop_id: Optional[int] = Field(default=None, gt=0)
+    destination_alert_stop_id: Optional[int] = Field(default=None, gt=0)
     notifications_on: Optional[bool] = None
     device_token: Optional[str] = None
 
 
-class SendOtpEvent(BaseModel):
-    """
-    Fired when a user requests an OTP to sign in.
-    """
-    email: str
-    name: str
-    otp: str
-
-
-#  EventBus 
+#  EventBus
 
 class EventBus:
     """
     Thin wrapper around Redis Streams for publishing and consuming events.
-
-    Redis Streams (XADD/XREADGROUP) are like a message queue:
-    - Multiple consumers can read from the same stream
-    - Each message is acknowledged individually, so nothing is lost on crash
-    - Messages are automatically trimmed after 10,000 entries
-
-    Usage:
-        bus = EventBus(redis)
-        await bus.publish("gps.snapped", my_event)
     """
 
     def __init__(self, redis: Redis):
         self.redis = redis
 
-    async def publish(self, stream: str, event: BaseModel) -> None:
+    # A message that cannot even be parsed/validated (a "poison" message) or that
+    # keeps failing its handler must not be reclaimed forever — after this many
+    # delivery attempts it is moved to a dead-letter stream and acked.
+    MAX_DELIVERY_ATTEMPTS = 5
+
+    async def _dead_letter(self, stream: str, group: str, msg_id, fields: dict, reason: str) -> None:
         """
-        Publishes an event to a Redis Stream.
+        Move a message that cannot be processed to '<stream>.deadletter' and ack it
+        on the original stream so it stops being redelivered/reclaimed. Dead-letter
+        failures are logged but never raised — a broken DLQ must not wedge the loop.
+        """
+        try:
+            raw = fields.get(b"data") if b"data" in fields else fields.get("data")
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            await self.redis.xadd(
+                f"{stream}.deadletter",
+                {"data": raw if raw is not None else "", "reason": str(reason)[:500]},
+                maxlen=10_000,
+                approximate=True,
+            )
+        except Exception as e:
+            logger.error("Failed to dead-letter msg %s on %s: %s", msg_id, stream, e)
+        finally:
+            try:
+                await self.redis.xack(stream, group, msg_id)
+            except Exception as e:
+                logger.error("Failed to ack dead-lettered msg %s on %s: %s", msg_id, stream, e)
+
+    async def publish(self, stream: str, event: BaseModel, maxlen: int = 10_000) -> None:
+        """
+        Publishes an event to a Redis Stream asynchronously.
 
         Input:
             stream - Stream name (e.g., "gps.snapped", "trip.status")
             event  - Any Pydantic model instance to publish
-
-        Output: nothing (fire and forget)
+            maxlen - Stream size limit to prevent unbounded growth (default 10,000)
 
         The event is serialized to JSON and stored in Redis.
-        Stream is capped at 10,000 messages to prevent unbounded growth.
         """
         await self.redis.xadd(
             stream,
             {"data": event.model_dump_json()},
-            maxlen=10_000,
+            maxlen=maxlen,
             approximate=True,
         )
 
@@ -261,27 +180,80 @@ class EventBus:
         consumer: str,
         handler,
         batch_size: int = 50,
+        model_cls: Optional[Type[BaseModel]] = None,
     ) -> None:
         """
         Reads events from a Redis Stream in a loop and calls handler() for each one.
-
-        Input:
-            stream     - Stream name to read from
-            group      - Consumer group name (allows multiple services to share a stream)
-            consumer   - Unique name for this consumer within the group
-            handler    - async function(dict) → called for each event
-            batch_size - Max events to read in a single call (default: 50)
-
-        Output: runs forever until the asyncio task is cancelled
-
-        Each successfully handled message is acknowledged so it won't be
-        re-delivered. If handler() raises, the error is logged but the loop continues.
         """
         try:
             await self.redis.xgroup_create(stream, group, id="0", mkstream=True)
-        except Exception:
-            pass  # Group already exists — that's fine
+        except Exception as e:
+            msg = str(e)
+            if "BUSYGROUP" not in msg:
+                raise
 
+        # PEL recovery (reclaim messages idle for > 5 minutes)
+        try:
+            try:
+                # Try XAUTOCLAIM first (Redis 6.2+)
+                _, claimed_messages = await self.redis.xautoclaim(
+                    stream, group, consumer, min_idle_time=300000, start_id="0", count=50
+                )
+            except Exception as e:
+                if "unknown command" in str(e).lower():
+                    # Fallback for Redis < 6.2
+                    pending_res = await self.redis.xpending_range(
+                        stream, group, min="-", max="+", count=50
+                    )
+                    msg_ids = [
+                        msg["message_id"] for msg in pending_res 
+                        if msg.get("time_since_delivered", 0) >= 300000
+                    ]
+                    claimed_messages = []
+                    if msg_ids:
+                        claimed_messages = await self.redis.xclaim(
+                            stream, group, consumer, min_idle_time=300000, message_ids=msg_ids
+                        )
+                else:
+                    raise
+
+            for msg_id, fields in claimed_messages or []:
+                # Cap redelivery: a message that has already been delivered too many
+                # times is poison — dead-letter it instead of reclaiming forever.
+                try:
+                    pending = await self.redis.xpending_range(
+                        stream, group, min=msg_id, max=msg_id, count=1
+                    )
+                    delivered = pending[0].get("times_delivered", 0) if pending else 0
+                except Exception:
+                    delivered = 0
+                if delivered > self.MAX_DELIVERY_ATTEMPTS:
+                    await self._dead_letter(
+                        stream, group, msg_id, fields,
+                        reason=f"exceeded {self.MAX_DELIVERY_ATTEMPTS} delivery attempts",
+                    )
+                    continue
+                try:
+                    data = fields[b"data"] if b"data" in fields else fields.get("data")
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
+
+                    try:
+                        json_dict = json.loads(data)
+                        payload = model_cls.model_validate(json_dict) if model_cls else json_dict
+                    except Exception as parse_err:
+                        # Unparseable/invalid: it will never succeed on retry.
+                        await self._dead_letter(stream, group, msg_id, fields, reason=f"parse/validate: {parse_err}")
+                        continue
+
+                    await handler(payload)
+                    await self.redis.xack(stream, group, msg_id)
+                except Exception as ex:
+                    logger.exception("Failed processing recovered PEL msg %s: %s", msg_id, ex)
+        except Exception as e:
+            logger.error("PEL recovery failed during startup: %s", e)
+
+        # Normal loop
         while True:
             try:
                 resp = await self.redis.xreadgroup(
@@ -290,13 +262,30 @@ class EventBus:
                 for _, messages in resp or []:
                     for msg_id, fields in messages:
                         try:
-                            await handler(json.loads(fields["data"]))
+                            data = fields[b"data"] if b"data" in fields else fields.get("data")
+                            if isinstance(data, bytes):
+                                data = data.decode("utf-8")
+
+                            try:
+                                json_dict = json.loads(data)
+                                payload = model_cls.model_validate(json_dict) if model_cls else json_dict
+                            except Exception as parse_err:
+                                # Poison message: parsing/validation can never succeed
+                                # on retry, so dead-letter it immediately rather than
+                                # leaving it to be reclaimed forever.
+                                await self._dead_letter(stream, group, msg_id, fields, reason=f"parse/validate: {parse_err}")
+                                continue
+
+                            await handler(payload)
                             await self.redis.xack(stream, group, msg_id)
                         except Exception as e:
-                            logger.exception(
-                                "Event handler failed for msg %s: %s", msg_id, e
-                            )
+                            # Handler failed on a well-formed event: leave it UNACKED
+                            # so it stays in the PEL and is retried (and eventually
+                            # dead-lettered after MAX_DELIVERY_ATTEMPTS) by the
+                            # reclaim path above.
+                            logger.exception("Event handler failed for msg %s: %s", msg_id, e)
             except asyncio.CancelledError:
+                logger.info("EventBus consumer loop cancelled")
                 break
             except Exception as e:
                 logger.error("EventBus consume error: %s", e)

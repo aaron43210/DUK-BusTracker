@@ -2,34 +2,44 @@
  * App.jsx — DUK Bus Tracker PWA 2
  * Universal device support. Unified Route+Map toggle view.
  */
-import React, { useState, useCallback, createContext, useContext, useEffect, useRef } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import React, { useState, useCallback, createContext, useContext, useEffect, lazy, Suspense } from 'react';
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
-import { getToken, clearToken, getUIPref, setUIPref } from './storage';
-import { clearApiToken } from './api';
+import { getToken, clearSession, getUser } from './storage';
+import { clearApiToken, getMyNotifications, proactiveRefresh } from './api';
 import { ToastContainer } from './components/Toast';
 import { AppProvider } from './context';
-import useBusTracking from './hooks/useBusTracking';
 
 import './liquid-glass.css';
 
 import ProfileSetup from './pages/ProfileSetup';
-import RouteView from './pages/RouteView';
-import Settings from './pages/Settings';
-import Help from './pages/Help';
+
+// Login is the first screen for new users, so it ships in the main chunk.
+// Everything behind auth is split out and precached by the service worker.
+const RouteView = lazy(() => import('./pages/RouteView'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Help = lazy(() => import('./pages/Help'));
+const OnboardingModal = lazy(() => import('./components/OnboardingModal'));
 
 const loadFirebase = () => import('./firebase');
+
+// Firebase isn't needed for the first paint, so wait for the window load
+// event before fetching it rather than competing with the page's own assets.
+const loadFirebaseAfterLoad = () => new Promise(resolve => {
+  if (document.readyState === 'complete') resolve();
+  else window.addEventListener('load', resolve, { once: true });
+}).then(loadFirebase);
 
 // Toast context
 export const ToastContext = createContext(null);
 export function useToast() { return useContext(ToastContext); }
 
 // Notification context
-export const NotificationContext = createContext({ notifications: [], addNotification: () => { }, clearNotifications: () => { }, hasUnread: false, markRead: () => { }, checkNotifications: async () => {} });
+export const NotificationContext = createContext({ notifications: [], addNotification: () => { }, clearNotifications: () => { }, hasUnread: false, markRead: () => { }, checkNotifications: async () => { } });
 export function useNotifications() { return useContext(NotificationContext); }
 
 // ViewMode context — controls Route vs Map tab from anywhere (e.g. DrawerMenu)
-export const ViewModeContext = createContext({ viewMode: 'route', setViewMode: () => {} });
+export const ViewModeContext = createContext({ viewMode: 'route', setViewMode: () => { } });
 export function useViewMode() { return useContext(ViewModeContext); }
 
 function ViewModeProvider({ children }) {
@@ -42,13 +52,11 @@ function ViewModeProvider({ children }) {
 }
 
 // UI Mode Context
-export const UIContext = createContext({ isUI2: false, toggleUI2: () => {} });
+export const UIContext = createContext({ isUI2: false });
 export function useUI() { return useContext(UIContext); }
 
 function UIProvider({ children }) {
-  const [isUI2, setIsUI2] = useState(true);
-
-  const toggleUI2 = useCallback(() => {}, []);
+  const isUI2 = false;
 
   useEffect(() => {
     if (isUI2) {
@@ -59,7 +67,7 @@ function UIProvider({ children }) {
   }, [isUI2]);
 
   return (
-    <UIContext.Provider value={{ isUI2, toggleUI2 }}>
+    <UIContext.Provider value={{ isUI2 }}>
       {children}
     </UIContext.Provider>
   );
@@ -140,7 +148,7 @@ function NetworkGate({ children }) {
         boxShadow: '0 8px 32px rgba(0,0,0,0.10)',
       }}>
         <div style={{ marginBottom: '24px' }}>
-          <img src="/duk-logo.png" alt="DUK Logo" style={{ height: '48px', objectFit: 'contain' }} />
+          <img src="./duk-logo.webp" alt="DUK Logo" width={285} height={136} style={{ height: '48px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <h2 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '10px', color: '#111' }}>
           No Internet Connection
@@ -149,7 +157,7 @@ function NetworkGate({ children }) {
           The bus tracker needs a live connection to show real-time bus locations and schedules.
         </p>
         <button
-          onClick={() => setOffline(!navigator.onLine)}
+          onClick={() => { if (navigator.onLine) setOffline(false); }}
           style={{
             width: '100%', padding: '14px',
             background: 'rgba(0,122,255,0.85)',
@@ -165,20 +173,22 @@ function NetworkGate({ children }) {
   );
 }
 
+
+
 // Splash Context
 export const SplashContext = createContext({ setSplashReady: () => { }, isAppReady: false, showSplash: true });
 
 function SplashProvider({ children }) {
   const [showSplash, setShowSplash] = useState(true);
   const [isAppReady, setIsAppReady] = useState(false);
-  const mountTime = useRef(Date.now());
 
-  const setSplashReady = () => {
+  // Hide the splash as soon as the page says it's ready — no minimum display
+  // time, since holding it up delays the first real paint (LCP). Stable
+  // identity so pages that list it as an effect dependency don't re-run.
+  const setSplashReady = useCallback(() => {
     setIsAppReady(true);
-    const elapsed = Date.now() - mountTime.current;
-    const delay = Math.max(0, 1000 - elapsed);
-    setTimeout(() => setShowSplash(false), delay);
-  };
+    setShowSplash(false);
+  }, []);
 
   useEffect(() => {
     const fallbackTimer = setTimeout(() => {
@@ -200,6 +210,9 @@ function NotificationProvider({ children }) {
   const [notifications, setNotifications] = useState([]);
   const [hasUnread, setHasUnread] = useState(false);
   const showToast = useToast();
+  // Re-render on navigation so logging in or out re-evaluates the token below.
+  useLocation();
+  const isAuthed = !!getToken();
 
   const addNotification = useCallback((notif) => {
     setNotifications((prev) => {
@@ -220,35 +233,69 @@ function NotificationProvider({ children }) {
     localStorage.setItem('last_read_time', Date.now().toString());
   }, []);
 
+  // Foreground push only matters once there's an FCM token, i.e. after login,
+  // so logged-out visitors never download Firebase.
   useEffect(() => {
-    let unsub = () => {};
-    loadFirebase().then(({ onForegroundMessage }) => {
+    if (!isAuthed) return;
+    let unsub = () => { };
+    let cancelled = false;
+    loadFirebaseAfterLoad().then(({ onForegroundMessage }) => {
+      if (cancelled) return;
       unsub = onForegroundMessage((msg) => {
         addNotification(msg);
         if (msg && msg.title) showToast(msg.title, 'info');
       });
-    }).catch(() => {});
-    return () => unsub();
-  }, [addNotification, showToast]);
+    }).catch(() => { });
+    return () => { cancelled = true; unsub(); };
+  }, [isAuthed, addNotification, showToast]);
 
   const checkNotifications = useCallback(() => {
-    const token = localStorage.getItem('duk_jwt_token');
+    const token = getToken();
     if (!token) return Promise.resolve();
-    return import('./api').then(({ getMyNotifications }) => {
-      return getMyNotifications().then(data => {
-        if (data && data.notifications && data.notifications.length > 0) {
-          const lastRead = parseInt(localStorage.getItem('last_read_time') || '0', 10);
-          const hasNew = data.notifications.some(n => new Date(n.time).getTime() > lastRead);
-          if (hasNew) setHasUnread(true);
-        }
-      }).catch(() => {});
-    }).catch(() => {});
+    return getMyNotifications().then(data => {
+      if (data && data.notifications && data.notifications.length > 0) {
+        const lastRead = parseInt(localStorage.getItem('last_read_time') || '0', 10);
+        const hasNew = data.notifications.some(n => new Date(n.time).getTime() > lastRead);
+        if (hasNew) setHasUnread(true);
+      }
+    }).catch(() => { });
   }, []);
 
   useEffect(() => {
-    checkNotifications();
-    const intervalId = setInterval(checkNotifications, 15000);
-    return () => clearInterval(intervalId);
+    let intervalId = null;
+
+    const startPolling = () => {
+      if (!intervalId) {
+        checkNotifications();
+        intervalId = setInterval(checkNotifications, 15000);
+      }
+    };
+
+    const stopPolling = () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    if (document.visibilityState === 'visible') {
+      startPolling();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [checkNotifications]);
 
   return (
@@ -265,9 +312,9 @@ function ApiErrorHandler() {
   useEffect(() => {
     const onUnauthorized = () => {
       clearApiToken();
-      clearToken();
+      clearSession();  // wipe access + refresh token + cached user, not just the access token
       showToast('Your session expired. Please log in again.', 'error');
-      window.location.replace('/');
+      window.location.replace(window.location.pathname);
     };
     const onServerError = () => showToast('Server error. Please try again shortly.', 'error');
     const onOffline = () => showToast('Connection lost. Retrying...', 'error');
@@ -286,29 +333,78 @@ function ApiErrorHandler() {
   return null;
 }
 
-// App Shell
 function AppShell() {
   const { showSplash } = useContext(SplashContext);
-  useBusTracking();
+  const [user, setUser] = useState(() => getUser());
+
+  // Track localStorage changes in case other tabs/components update it
+  useEffect(() => {
+    const handleStorage = () => setUser(getUser());
+    window.addEventListener('storage', handleStorage);
+    // Custom event to trigger re-check when we update it in the same window
+    const handleLocalUpdate = () => handleStorage();
+    window.addEventListener('user-updated', handleLocalUpdate);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('user-updated', handleLocalUpdate);
+    };
+  }, []);
+
+  const needsOnboarding = getToken() && user && (
+    !user.name ||
+    user.name === user.email.split('@')[0] ||
+    !user.boarding_stop_id
+  );
 
   useEffect(() => {
     if (getToken()) {
-      loadFirebase().then(({ refreshFcmToken }) => refreshFcmToken()).catch(() => {});
+      loadFirebaseAfterLoad().then(({ refreshFcmToken }) => refreshFcmToken()).catch(() => { });
     }
+  }, []);
+
+  // Proactive token refresh on app resume — runs when the user brings the app
+  // to the foreground (tab visible again, phone unlocked). This ensures the
+  // access token is always fresh before any request fires, eliminating the
+  // reactive 401→refresh race that causes logouts on mobile networks.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && getToken()) {
+        proactiveRefresh().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    // Also check on mount (cold start / PWA launch from home screen)
+    if (getToken()) proactiveRefresh().catch(() => {});
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, []);
 
   return (
     <div className="app-shell">
       <ApiErrorHandler />
-      <Routes>
-        <Route path="/" element={<RedirectIfAuthed><ProfileSetup /></RedirectIfAuthed>} />
-        <Route path="/route" element={<RequireAuth><RouteView /></RequireAuth>} />
-        <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
-        <Route path="/help" element={<RequireAuth><Help /></RequireAuth>} />
-        {/* Redirect old /map deep links to /route */}
-        <Route path="/map" element={<Navigate to="/route" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={null}>
+        <Routes>
+          <Route path="/" element={<RedirectIfAuthed><ProfileSetup /></RedirectIfAuthed>} />
+          <Route path="/route" element={<RequireAuth><RouteView /></RequireAuth>} />
+          <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+          <Route path="/help" element={<RequireAuth><Help /></RequireAuth>} />
+          {/* Redirect old /map deep links to /route */}
+          <Route path="/map" element={<Navigate to="/route" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+
+      {/* Own boundary so loading the modal chunk doesn't blank the page behind it */}
+      {needsOnboarding && (
+        <Suspense fallback={null}>
+          <OnboardingModal
+            user={user}
+            onComplete={(updatedUser) => {
+              setUser(updatedUser);
+              window.dispatchEvent(new Event('user-updated'));
+            }}
+          />
+        </Suspense>
+      )}
 
       {showSplash && (
         <div className="splash-screen" style={{ position: 'absolute', inset: 0, zIndex: 99999 }}>
@@ -327,7 +423,7 @@ function AppShell() {
 export default function App() {
   return (
     <UIProvider>
-      <BrowserRouter>
+      <HashRouter>
         <AppProvider>
           <ToastProvider>
             <NotificationProvider>
@@ -341,7 +437,7 @@ export default function App() {
             </NotificationProvider>
           </ToastProvider>
         </AppProvider>
-      </BrowserRouter>
+      </HashRouter>
     </UIProvider>
   );
 }

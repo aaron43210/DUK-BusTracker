@@ -5,15 +5,12 @@
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, User, MapPin, Settings, Send, LogOut, MessageSquare, Bus } from 'lucide-react';
-import { getUser, clearSession } from '../storage';
-import { submitSuggestion } from '../api';
-import { useToast, useViewMode, useUI } from '../App';
-import { Palette } from 'lucide-react';
+import { X, User, Settings, MessageSquare, HelpCircle, Info } from 'lucide-react';
+import { getUser } from '../storage';
+import { useViewMode } from '../App';
 
 import AboutModal from './AboutModal';
 import SuggestionsModal from './SuggestionsModal';
-import { HelpCircle, Info } from 'lucide-react';
 
 export default function DrawerMenu({ isOpen, onClose }) {
   const navigate = useNavigate();
@@ -41,12 +38,6 @@ export default function DrawerMenu({ isOpen, onClose }) {
     return () => { document.body.style.overflow = ''; };
   }, [isOpen, isAboutOpen, isSuggestionsOpen]);
 
-  const handleLogout = useCallback(() => {
-    clearSession();
-    onClose();
-    navigate('/', { replace: true });
-  }, [navigate, onClose]);
-
   const handleOverlayClick = useCallback((e) => {
     if (e.target === overlayRef.current) onClose();
   }, [onClose]);
@@ -64,7 +55,7 @@ export default function DrawerMenu({ isOpen, onClose }) {
           {/* Header */}
           <div className="drawer__header">
             <div className="drawer__brand">
-              <img src="/duk-logo.png" alt="DUK Logo" style={{ height: '48px', objectFit: 'contain' }} />
+              <img src="./duk-logo.webp" alt="DUK Logo" width={285} height={136} loading="lazy" decoding="async" style={{ height: '48px', width: 'auto', objectFit: 'contain' }} />
             </div>
             <button className="drawer__close" onClick={onClose} aria-label="Close menu">
               <X size={20} />
@@ -117,7 +108,7 @@ export default function DrawerMenu({ isOpen, onClose }) {
 
           {/* Footer */}
           <div className="drawer__footer" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-            <img src="/canlab.png" alt="CAN Lab Logo" style={{ height: '45px', objectFit: 'contain' }} />
+            <img src="./canlab.webp" alt="CAN Lab Logo" width={348} height={196} loading="lazy" decoding="async" style={{ height: '45px', width: 'auto', objectFit: 'contain' }} />
             <span className="drawer__version">DUK Bus Tracker v1.0 PWA</span>
           </div>
         </aside>

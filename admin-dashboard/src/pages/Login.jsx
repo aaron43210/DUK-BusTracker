@@ -7,7 +7,7 @@
 import React, { useState } from 'react'; // React + state hook
 import { login, setToken } from '../api.js'; // API functions
 import { useToast } from '../App.jsx'; // Toast notification
-import dukLogo from '../assets/duk_logo.png'; // API functions
+import dukLogo from '../assets/duk_logo.webp'; // API functions
 
 // Login component
 // onLogin(token) is received from App.jsx
@@ -90,6 +90,8 @@ function Login({ onLogin }) {
           <img
             src={dukLogo}
             alt="Digital University Kerala"
+            width={285}
+            height={136}
             style={{
 
               // Make image a block element

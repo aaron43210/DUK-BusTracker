@@ -14,7 +14,11 @@ start_scheduler() {
 }
 
 start_celery() {
-    (cd services/notification-service && celery -A celery_app worker --loglevel=info -c 1) &
+    # Consume BOTH configured queues explicitly. celery_app routes
+    # send_fcm_notification -> "fcm_notifications" and create_in_app_notification
+    # -> "celery". Without -Q, a future config change could strand the FCM queue
+    # and silently stop all push notifications.
+    (cd services/notification-service && celery -A celery_app worker --loglevel=info -c 1 -Q fcm_notifications,celery) &
     PID_CELERY=$!
 }
 
@@ -23,15 +27,21 @@ start_lifecycle() {
     PID_LIFECYCLE=$!
 }
 
+start_ml_trainer() {
+    python services/ml-training-job/train_job.py &
+    PID_ML=$!
+}
+
 start_consumer
 start_scheduler
 start_celery
 start_lifecycle
+start_ml_trainer
 
 echo "[WORKER-NODE] All workers started! Entering supervisor monitor loop..."
 
 # Trap termination signals
-trap "kill $PID_CONSUMER $PID_SCHEDULER $PID_CELERY $PID_LIFECYCLE 2>/dev/null; exit 0" SIGINT SIGTERM
+trap "kill $PID_CONSUMER $PID_SCHEDULER $PID_CELERY $PID_LIFECYCLE $PID_ML 2>/dev/null; exit 0" SIGINT SIGTERM
 
 while true; do
     sleep 5
@@ -50,5 +60,9 @@ while true; do
     if ! kill -0 $PID_LIFECYCLE 2>/dev/null; then
         echo "[SUPERVISOR] Trip Lifecycle Consumer exited, restarting..."
         start_lifecycle
+    fi
+    if ! kill -0 $PID_ML 2>/dev/null; then
+        echo "[SUPERVISOR] ML Training Supervisor exited, restarting..."
+        start_ml_trainer
     fi
 done

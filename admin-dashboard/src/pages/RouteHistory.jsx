@@ -5,8 +5,46 @@ import { useToast } from "../App.jsx";
 import { loadMapLibre, todayStr } from "../utils.js";
 import { Search, MapPin, Play, Pause, RotateCcw, Clock } from "lucide-react";
 
+// Distance-thin a list of {lat,lon} points: keep the first, the last, and any
+// point at least `minMeters` from the last kept one. A day of 5-7s GPS pings is
+// mostly redundant (idling, straightaways); thinning slashes the number of OSRM
+// /match calls needed to snap the trail, with no visible change to the line.
+function thinByDistance(pts, minMeters) {
+    if (!pts || pts.length <= 2) return pts || [];
+    const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
+    const kept = [pts[0]];
+    let last = pts[0];
+    for (let i = 1; i < pts.length - 1; i++) {
+        const p = pts[i];
+        const dLat = toRad(p.lat - last.lat);
+        const dLon = toRad(p.lon - last.lon);
+        const a =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(last.lat)) * Math.cos(toRad(p.lat)) * Math.sin(dLon / 2) ** 2;
+        const dist = 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+        if (dist >= minMeters) { kept.push(p); last = p; }
+    }
+    kept.push(pts[pts.length - 1]);
+    return kept;
+}
+
+// Run async `fn` over `items` with at most `limit` in flight; preserves order.
+// Lets us overlap OSRM request latency without flooding a CPU-bound 4-core OSRM.
+async function mapWithConcurrency(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    async function worker() {
+        while (next < items.length) {
+            const idx = next++;
+            results[idx] = await fn(items[idx], idx);
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
 // Premium Custom Time Picker Component
-function PremiumTimePicker({ value, onChange }) {
+function PremiumTimePicker({ value, onChange, label }) {
     const [h24, m] = value ? value.split(':') : ['', ''];
     let h12 = '';
     let ampm = 'AM';
@@ -52,7 +90,7 @@ function PremiumTimePicker({ value, onChange }) {
             borderRadius: '0', padding: '8px 12px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.03)', width: 'max-content'
         }}>
-            <select value={h12} onChange={handleHour} style={selectStyle}>
+            <select aria-label={`${label} hour`} value={h12} onChange={handleHour} style={selectStyle}>
                 <option value="">--</option>
                 {[...Array(12)].map((_, i) => {
                     const val = (i + 1).toString().padStart(2, '0');
@@ -60,14 +98,14 @@ function PremiumTimePicker({ value, onChange }) {
                 })}
             </select>
             <span style={{ fontWeight: 'bold', color: 'var(--text-muted)' }}>:</span>
-            <select value={m} onChange={handleMin} style={selectStyle}>
+            <select aria-label={`${label} minute`} value={m} onChange={handleMin} style={selectStyle}>
                 <option value="">--</option>
                 {[...Array(60)].map((_, i) => {
                     const val = i.toString().padStart(2, '0');
                     return <option key={val} value={val}>{val}</option>;
                 })}
             </select>
-            <select value={ampm} onChange={handleAmPm} style={{ ...selectStyle, color: 'var(--primary)', fontWeight: '600', marginLeft: '4px' }}>
+            <select aria-label={`${label} AM/PM`} value={ampm} onChange={handleAmPm} style={{ ...selectStyle, color: 'var(--primary)', fontWeight: '600', marginLeft: '4px' }}>
                 <option value="AM">AM</option>
                 <option value="PM">PM</option>
             </select>
@@ -248,25 +286,37 @@ export default function RouteHistory() {
         // Snap the GPS trail using OSRM Map Matching with road centerline interpolation
         (async () => {
             try {
+                // Thin dense pings first so far fewer points go through OSRM.
+                const thinned = thinByDistance(pts, 25);
+
                 const chunks = [];
-                for (let i = 0; i < coords.length; i += 89) {
-                    const chunk = coords.slice(i, i + 90);
-                    if (chunk.length >= 2) {
-                        chunks.push(chunk);
-                    }
+                // Overlapping chunks of 20 (share 1 point) so segments join seamlessly.
+                for (let i = 0; i < thinned.length - 1; i += 19) {
+                    chunks.push(thinned.slice(i, i + 20));
                 }
 
                 if (!chunks.length) return;
 
-                const results = await Promise.all(chunks.map(chunk => snapRoute(chunk)));
-                let snappedCoords = [];
-                results.forEach((res, i) => {
-                    if (res && res.coordinates && res.coordinates.length > 0) {
-                        const pts = i > 0 ? res.coordinates.slice(1) : res.coordinates;
-                        snappedCoords.push(...pts);
-                    }
+                // Snap chunks with a small concurrency cap (overlaps latency without
+                // thrashing the 4-core OSRM); on failure fall back to the raw points.
+                const snappedByChunk = await mapWithConcurrency(chunks, 3, async (chunk) => {
+                    try {
+                        const res = await snapRoute(chunk);
+                        if (res && res.coordinates && res.coordinates.length > 0) {
+                            return res.coordinates;
+                        }
+                    } catch (e) { /* fall through to raw */ }
+                    return chunk.map((p) => [p.lon, p.lat]);
                 });
 
+                // Assemble in order, dropping each later chunk's shared first point.
+                let snappedCoords = [];
+                for (let i = 0; i < snappedByChunk.length; i++) {
+                    const seg = i > 0 ? snappedByChunk[i].slice(1) : snappedByChunk[i];
+                    snappedCoords.push(...seg);
+                }
+
+                // Update the map line directly after everything finishes!
                 if (snappedCoords.length > 0 && map.getSource("rh-trail")) {
                     map.getSource("rh-trail").setData({
                         type: "Feature",
@@ -447,8 +497,9 @@ export default function RouteHistory() {
             <div className="card" style={{ padding: "12px 20px" }}>
                 <div style={{ display: "flex", gap: "16px", alignItems: "flex-end", flexWrap: "wrap" }}>
                     <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">Date</label>
+                        <label className="form-label" htmlFor="history-date">Date</label>
                         <input
+                            id="history-date"
                             type="date"
                             className="form-input"
                             value={searchDate}
@@ -458,12 +509,12 @@ export default function RouteHistory() {
                         />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">Start Time</label>
-                        <PremiumTimePicker value={startTime} onChange={setStartTime} />
+                        <div className="form-label">Start Time</div>
+                        <PremiumTimePicker label="Start time" value={startTime} onChange={setStartTime} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">End Time</label>
-                        <PremiumTimePicker value={endTime} onChange={setEndTime} />
+                        <div className="form-label">End Time</div>
+                        <PremiumTimePicker label="End time" value={endTime} onChange={setEndTime} />
                     </div>
 
                     <button className="btn btn-primary" onClick={search} disabled={loading} style={{ height: "38px", display: "flex", alignItems: "center" }}>

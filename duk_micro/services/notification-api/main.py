@@ -25,48 +25,71 @@ import os
 import sys
 import uuid
 from typing import Optional
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select, desc, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from fastapi.responses import JSONResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 from libs.duk_common.auth import make_get_current_user_id
 from libs.duk_common.settings import get_settings
 
-from database_local import get_db, AsyncSessionLocal
-from models_local import UserNotificationPreference, InAppNotification, Suggestion, AdminBroadcast
+from database_local import get_db
+from libs.duk_common.models import User, UserNotificationPreference, InAppNotification, Suggestion
 
 from libs.duk_common.middleware import configure_app
 
-app = FastAPI(title="notification-api")
+app = FastAPI(title="notification-api", docs_url=None, redoc_url=None)
 settings = get_settings()
-configure_app(app, allowed_origins=settings.allowed_origins_list)
+configure_app(app, allowed_origins=settings.allowed_origins_list, environment=settings.ENVIRONMENT)
 
-get_current_user_id = make_get_current_user_id(settings.SECRET_KEY, settings.ALGORITHM)
+from libs.duk_common.redis_client import get_redis
+from libs.duk_common.rate_limit_deps import make_rate_limit_dep
+
+_auth = make_get_current_user_id(
+    secret_key=settings.SECRET_KEY,
+    redis_getter=get_redis,
+    algorithm=settings.ALGORITHM,
+)
+get_current_user_id = _auth.get_user_id
+
+notif_general_limit = make_rate_limit_dep("notif:general", max_requests=30, window_seconds=60)
+suggestion_limit = make_rate_limit_dep("notif:suggestion", max_requests=3, window_seconds=3600)
 
 class NotifPrefRequest(BaseModel):
     route_id: int
     direction: str
     boarding_stop_id: int
     destination_stop_id: int
-    fcm_token: str
 
 @app.post("/api/v1/notifications/preferences")
-async def save_preferences(req: NotifPrefRequest, db: AsyncSession = Depends(get_db), user_id: str = Depends(get_current_user_id)):
-    stmt = select(UserNotificationPreference).where(UserNotificationPreference.user_id == str(user_id))
+async def save_preferences(req: NotifPrefRequest, db: AsyncSession = Depends(get_db), user_id: str = Depends(get_current_user_id), _limit: None = Depends(notif_general_limit)):
+    """Creates or updates the authenticated user's notification preferences.
+    
+    This endpoint allows a user to specify their preferences for notifications, 
+    including which route, direction, boarding stop, and destination stop they 
+    are interested in. 
+    
+    Returns:
+        dict: A dictionary with a status indicator.
+    
+    Raises:
+        HTTPException: If the user is not authenticated or if the request is rate-limited.
+    """
+    stmt = select(UserNotificationPreference).where(UserNotificationPreference.user_id == uuid.UUID(user_id))
     result = await db.execute(stmt)
     pref = result.scalar_one_or_none()
     
     if not pref:
-        pref = UserNotificationPreference(user_id=str(user_id))
+        pref = UserNotificationPreference(user_id=uuid.UUID(user_id))
         db.add(pref)
         
     pref.route_id = req.route_id
     pref.direction = req.direction
     pref.boarding_stop_id = req.boarding_stop_id
     pref.destination_stop_id = req.destination_stop_id
-    pref.fcm_token = req.fcm_token
     pref.is_active = True
     
     await db.commit()
@@ -75,24 +98,59 @@ async def save_preferences(req: NotifPrefRequest, db: AsyncSession = Depends(get
 @app.get("/api/v1/notifications")
 async def get_my_notifications(
     db: AsyncSession = Depends(get_db),
-    current_user_id: str = Depends(get_current_user_id)
+    current_user_id: str = Depends(get_current_user_id),
+    _limit: None = Depends(notif_general_limit)
 ):
-    """Fetch all In-App Notifications for the current user."""
+    """Fetch all In-App Notifications for the current user.
+    
+    Fetches notifications for the authenticated user, including broadcast 
+    notifications (sent to all users). Returns notifications from the last 
+    7 days, ordered by creation time in descending order.
+    
+    Args:
+        db: The database session.
+        current_user_id: The ID of the currently authenticated user.
+        _limit: Rate limit dependency.
+        
+    Returns:
+        dict: A dictionary containing a list of notifications.
+    
+    Raises:
+        HTTPException: If the user is not authenticated or if the request is rate-limited.
+    """
     user_uuid = uuid.UUID(current_user_id)
     
-    # 1. Fetch In-App Notifications
+    user_result = await db.execute(select(User).where(User.id == user_uuid))
+    user_obj = user_result.scalar_one_or_none()
+    user_created_at = user_obj.created_at if user_obj and user_obj.created_at else datetime.min.replace(tzinfo=timezone.utc)
+    
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    
     result = await db.execute(
         select(InAppNotification)
-        .where((InAppNotification.user_id == user_uuid) | (InAppNotification.user_id.is_(None)))
+        .where(
+            (InAppNotification.created_at >= seven_days_ago) &
+            (
+                (InAppNotification.user_id == user_uuid) |
+                ((InAppNotification.user_id.is_(None)) & (InAppNotification.created_at >= user_created_at))
+            )
+        )
         .order_by(desc(InAppNotification.created_at))
-        .limit(100)
+        .limit(20)
     )
     in_app_notifs = result.scalars().all()
     
+    redis = await get_redis()
     items = []
-    seen_signatures = set()
+    
     for n in in_app_notifs:
-        seen_signatures.add((n.title, n.body))
+        is_read = n.is_read
+        if n.user_id is None:
+            # Check Redis for broadcast read state
+            cache_key = f"notif_read:{user_uuid}:{n.id}"
+            if await redis.get(cache_key):
+                is_read = True
+                
         items.append({
             "id": n.id,
             "notification": {
@@ -100,68 +158,33 @@ async def get_my_notifications(
                 "body": n.body
             },
             "type": n.type,
-            "is_read": n.is_read,
+            "is_read": is_read,
             "time": n.created_at.isoformat() if n.created_at else None,
         })
         
-    # 2. Fetch legacy Suggestion responses
-    s_result = await db.execute(
-        select(Suggestion)
-        .where(Suggestion.user_id == user_uuid, Suggestion.admin_response.isnot(None))
-        .order_by(desc(Suggestion.id))
-        .limit(20)
-    )
-    suggestions = s_result.scalars().all()
-    
-    for s in suggestions:
-        body_text = f"Admin ({s.status}): {s.admin_response[:100]}..." if len(s.admin_response) > 100 else f"Admin ({s.status}): {s.admin_response}"
-        title_text = "Response to your suggestion"
-        
-        if (title_text, body_text) not in seen_signatures:
-            seen_signatures.add((title_text, body_text))
-            items.append({
-                "id": f"sugg_{s.id}",
-                "notification": {
-                    "title": title_text,
-                    "body": body_text
-                },
-                "type": "suggestion_response",
-                "is_read": False,
-                "time": s.created_at.isoformat() if s.created_at else None,
-            })
-            
-    # 3. Fetch legacy AdminBroadcasts
-    b_result = await db.execute(
-        select(AdminBroadcast)
-        .order_by(desc(AdminBroadcast.id))
-        .limit(10)
-    )
-    broadcasts = b_result.scalars().all()
-    
-    for b in broadcasts:
-        if (b.title, b.body) not in seen_signatures:
-            seen_signatures.add((b.title, b.body))
-            items.append({
-                "id": f"bc_{b.id}",
-                "notification": {
-                    "title": b.title,
-                    "body": b.body
-                },
-                "type": "broadcast",
-                "is_read": False,
-                "time": b.sent_at.isoformat() if b.sent_at else None,
-            })
-            
-    items.sort(key=lambda x: x["time"] if x["time"] else "", reverse=True)
     return {"notifications": items}
 
 @app.put("/api/v1/notifications/{notification_id}/read")
 async def mark_notification_read(
     notification_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user_id: str = Depends(get_current_user_id)
+    current_user_id: str = Depends(get_current_user_id),
+    _limit: None = Depends(notif_general_limit)
 ):
-    """Mark a notification as read."""
+    """Mark a notification as read.
+    
+    Args:
+        notification_id: The ID of the notification to mark as read.
+        db: The database session.
+        current_user_id: The ID of the currently authenticated user.
+        _limit: Rate limit dependency.
+        
+    Returns:
+        dict: A dictionary with a success indicator.
+    
+    Raises:
+        HTTPException: If the notification is not found or if the user is not authorized to mark it as read.
+    """
     user_uuid = uuid.UUID(current_user_id)
     result = await db.execute(
         select(InAppNotification)
@@ -173,6 +196,10 @@ async def mark_notification_read(
         raise HTTPException(status_code=404, detail="Notification not found")
         
     if notification.user_id is None:
+        # Broadcast notification: save read state to Redis for 7 days
+        redis = await get_redis()
+        cache_key = f"notif_read:{user_uuid}:{notification.id}"
+        await redis.set(cache_key, "1", ex=86400 * 7)
         return {"success": True}
         
     if notification.user_id != user_uuid:
@@ -195,18 +222,35 @@ async def submit_suggestion(
     req: SuggestionRequest,
     db:  AsyncSession = Depends(get_db),
     current_user_id: str = Depends(get_current_user_id),
+    _limit: None = Depends(suggestion_limit)
 ):
-    """Submit a user suggestion. Authenticated, but trip/location are optional."""
+    """Submit a user suggestion. Authenticated, but trip/location are optional.
+    
+    Args:
+        req: The suggestion request containing trip, location, and suggestion text.
+        db: The database session.
+        current_user_id: The ID of the currently authenticated user.
+        _limit: Rate limit dependency.
+        
+    Returns:
+        dict: A dictionary with the created suggestion.
+    
+    Raises:
+        HTTPException: If the suggestion text is empty, if the user is not authenticated, or if the request is rate-limited.
+    """
     import html
-    text = html.escape(req.suggestion.strip())[:500]
+    text = html.escape(req.suggestion.strip())[:500] if req.suggestion else ""
+    safe_trip = html.escape(req.trip.strip())[:100] if req.trip else None
+    safe_location = html.escape(req.location.strip())[:200] if req.location else None
+
     if not text:
         raise HTTPException(status_code=400, detail="Suggestion text is required.")
 
     user_uuid = uuid.UUID(current_user_id) if current_user_id else None
 
     s = Suggestion(
-        trip=req.trip,
-        location=req.location,
+        trip=safe_trip,
+        location=safe_location,
         suggestion=text,
         user_id=user_uuid,
         status="pending",
@@ -216,6 +260,26 @@ async def submit_suggestion(
     return {"success": True, "message": "Suggestion submitted successfully."}
 
 
+
+
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+async def health(db: AsyncSession = Depends(get_db)):
+    try:
+        await db.execute(text("SELECT 1"))
+        db_status = "ok"
+    except Exception:
+        db_status = "error"
+
+    redis_status = "error"
+    try:
+        redis = await get_redis()
+        if await redis.ping():
+            redis_status = "ok"
+    except Exception:
+        pass
+
+    status_code = 200 if db_status == "ok" and redis_status == "ok" else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ok" if status_code == 200 else "degraded", "db": db_status, "redis": redis_status}
+    )

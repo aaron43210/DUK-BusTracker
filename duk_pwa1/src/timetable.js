@@ -44,25 +44,6 @@ export function computeEstimatedTime(scheduledStr, delayMinutes) {
   return formatMinutesToTime(schedMins + delayMinutes);
 }
 
-export function getDelayBadge(actualStr, scheduledStr, globalLateMins) {
-  if (actualStr && scheduledStr) {
-    const actMins = parseTimeToMinutes(actualStr);
-    const schedMins = parseTimeToMinutes(scheduledStr);
-    if (actMins != null && schedMins != null) {
-      const diff = actMins - schedMins;
-      if (diff > 1) return { text: `+${diff}m delay`, type: 'late', diff };
-      if (diff < -1) return { text: `${Math.abs(diff)}m ahead`, type: 'ahead', diff };
-      return { text: 'On time', type: 'ahead', diff: 0 };
-    }
-  }
-  if (globalLateMins != null) {
-    if (globalLateMins > 0) return { text: `+${globalLateMins}m delay`, type: 'late', diff: globalLateMins };
-    if (globalLateMins < 0) return { text: `${Math.abs(globalLateMins)}m ahead`, type: 'ahead', diff: globalLateMins };
-    return { text: 'On time', type: 'ahead', diff: 0 };
-  }
-  return null;
-}
-
 export function haversineDistKm(lon1, lat1, lon2, lat2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -96,8 +77,4 @@ export function getMapViewport(stops, busCoord) {
     }
   }
   return { center: [76.9366, 8.5241], zoom: 12 };
-}
-
-export function todayStr() {
-  return new Date().toISOString().split('T')[0];
 }

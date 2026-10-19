@@ -18,11 +18,23 @@ export default function BusIdleAnimation({ nextTripTime, isUnscheduled }) {
           overflow: 'hidden'
         }}
       >
-        <img
-          src="/bus_animation.gif"
-          alt="Bus Animation"
+        {/* Opaque looping clip: H.264 MP4 instead of a 169KB GIF.
+            muted + playsInline are required for autoplay on iOS Safari. */}
+        <video
+          src={`${import.meta.env.BASE_URL}bus_animation.mp4`}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          width={800}
+          height={600}
+          aria-label="Bus Animation"
           style={{
+            display: 'block',
             width: '100%',
+            height: 'auto',
+            aspectRatio: '4 / 3',
             borderRadius: '16px',
             objectFit: 'cover',
             mixBlendMode: 'multiply'
@@ -56,7 +68,7 @@ export default function BusIdleAnimation({ nextTripTime, isUnscheduled }) {
           textAlign: 'center',
           fontSize: '13px',
           fontWeight: '500',
-          whiteSpace: 'nowrap'
+          lineHeight: '1.4'
         }}>
           To know the bus current location, use the Map View.
         </div>

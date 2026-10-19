@@ -15,35 +15,45 @@
 // In production, the build process injects VITE_API_URL.
 const BASE = import.meta.env.VITE_API_URL || '';
 
+// ── Admin base path ───────────────────────────────────────────────────────────
+// The URL to redirect to after session expiry. Matches the Nginx location block
+// that serves this admin panel. Change VITE_ADMIN_BASE_PATH in .env to override.
+const ADMIN_BASE_PATH = import.meta.env.VITE_ADMIN_BASE_PATH || '/duk/admin2026/';
+
 export function getWsBusUrl() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = BASE ? BASE.replace(/^https?:\/\//, '') : window.location.host;
-  // Include the admin token as a query param so the realtime-gateway can
-  // authenticate the WebSocket handshake before accepting the connection.
-  const token = _token ? `?token=${encodeURIComponent(_token)}` : '';
-  return `${protocol}//${host}/api/v1/ws/bus${token}`;
+  // No token in the URL: the realtime-gateway authenticates the handshake from
+  // the HttpOnly `admin_session` cookie, which the browser sends automatically
+  // on the same-site WebSocket upgrade. Keeps the JWT out of logs/history.
+  return `${protocol}//${host}/api/v1/ws/bus`;
 }
 
-// ── Internal: shared fetch wrapper ───────────────────────────────────────────
-// `_token` — the admin token returned by /api/v1/admin/login.
-// Stored in module-level state so every apiFetch call can use it.
-let _token = localStorage.getItem('admin_token') || '';
+// ── Internal: auth state ──────────────────────────────────────────────────────
+// The admin JWT now lives ONLY in an HttpOnly cookie set by /api/v1/admin/login,
+// so JavaScript can neither read nor exfiltrate it (XSS can't steal the session).
+// We keep a non-sensitive boolean in sessionStorage purely for client-side route
+// gating; the cookie is the real credential and the server enforces it on every
+// request (a 401/403 triggers the redirect below).
+let _isAuthed = sessionStorage.getItem('admin_authed') === '1';
 
-// setToken: called by App.jsx right after a successful login
-export function setToken(t) {
-  _token = t;
-  localStorage.setItem('admin_token', t);
+// setToken: called by App.jsx right after a successful login. The JWT argument is
+// intentionally ignored — the cookie already carries it; we only flip the flag.
+export function setToken(_t) {
+  _isAuthed = true;
+  sessionStorage.setItem('admin_authed', '1');
 }
 
-// getToken: lets components check if we are logged in
+// getToken: lets components check if we appear to be logged in (non-authoritative)
 export function getToken() {
-  return _token; // empty string = not logged in
+  return _isAuthed ? '1' : '';
 }
 
-// clearToken: called by App.jsx on logout — wipes the token from memory and localStorage
+// clearToken: called by App.jsx on logout — clears the local flag. The cookie is
+// cleared server-side by the /logout route (and on any 401/403).
 export function clearToken() {
-  _token = '';
-  localStorage.removeItem('admin_token');
+  _isAuthed = false;
+  sessionStorage.removeItem('admin_authed');
 }
 
 // ── Core fetch helper ─────────────────────────────────────────────────────────
@@ -51,9 +61,10 @@ async function apiFetch(path, opts = {}) {
   let res;
   try {
     res = await fetch(BASE + path, {
+      // Send the HttpOnly session cookie on every request (incl. cross-origin dev).
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'X-Admin-Token': _token,
         ...(opts.headers || {}),
       },
       ...opts,
@@ -67,7 +78,7 @@ async function apiFetch(path, opts = {}) {
   // so the admin doesn't remain in a misleadingly "logged in" state.
   if (res.status === 401 || res.status === 403) {
     clearToken();
-    window.location.href = '/login';
+    window.location.href = ADMIN_BASE_PATH;
     throw new Error('Session expired. Please log in again.');
   }
 
@@ -78,7 +89,15 @@ async function apiFetch(path, opts = {}) {
     const text = await res.text();
     let detail = text;
     try {
-      detail = JSON.parse(text).detail || text;
+      const json = JSON.parse(text);
+      if (typeof json.detail === 'string') {
+        detail = json.detail;
+      } else if (Array.isArray(json.detail)) {
+        // Pydantic validation errors return an array of objects — join them into a readable string
+        detail = json.detail.map(e => e.msg || JSON.stringify(e)).join(', ');
+      } else if (json.detail) {
+        detail = JSON.stringify(json.detail);
+      }
     } catch (_) { }
     throw new Error(detail);
   }
@@ -89,9 +108,11 @@ async function apiFetch(path, opts = {}) {
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export async function login(username, password) {
-  // POST /api/v1/admin/login — public endpoint, no X-Admin-Token needed
+  // POST /api/v1/admin/login — public endpoint. credentials:'include' is required
+  // so the browser stores the HttpOnly session cookie the server sets in response.
   const res = await fetch(BASE + '/api/v1/admin/login', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
@@ -101,8 +122,23 @@ export async function login(username, password) {
     throw new Error(data.detail || 'Login failed');
   }
 
-  const data = await res.json(); // { token: "..." }
-  return data.token;
+  // The session itself is in the HttpOnly cookie now; the body token is ignored
+  // by the browser client. Return a truthy marker so callers can flip UI state.
+  await res.json().catch(() => ({}));
+  return '1';
+}
+
+// logout: revoke the session server-side (blocklists the JTI and clears the
+// HttpOnly cookie). Best-effort — the local flag is cleared by the caller.
+export async function logout() {
+  try {
+    await fetch(BASE + '/api/v1/admin/logout', {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch (_err) {
+    // Network error on logout is non-fatal; local state is still cleared.
+  }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -153,7 +189,10 @@ export async function createTrip(direction, tripDate = '', createReturn = false)
 }
 
 export async function ensureTodayTrips() {
-  return apiFetch('/api/v1/admin/trips/today', { method: 'POST' });
+  return apiFetch('/api/v1/admin/trips/today', {
+    method: 'POST',
+    body: JSON.stringify({ route_id: 1 }),
+  });
 }
 
 export async function cancelAdvanceTrip({ trip_date, direction, also_cancel_return = false, reason = '' }) {
@@ -208,6 +247,13 @@ export async function deleteStop(id) {
   return apiFetch(`/api/v1/admin/stops/${id}`, { method: 'DELETE' });
 }
 
+export async function reorderStops(stopsArray) {
+  return apiFetch(`/api/v1/admin/stops/reorder`, {
+    method: 'POST',
+    body: JSON.stringify(stopsArray),
+  });
+}
+
 // setStopRole: PUT /api/v1/admin/stops/{id}/role
 // role: "morning_origin" | "morning_destination" | "evening_origin" | "evening_destination"
 export async function setStopRole(id, role) {
@@ -236,9 +282,9 @@ export async function deleteSuggestion(id) {
   return apiFetch(`/api/v1/admin/suggestions/${id}`, { method: 'DELETE' });
 }
 
-// updateSuggestion: maps to POST /api/v1/admin/suggestions/{id}/respond
-// Uses the field name "response" that the backend SuggestionResponseRequest expects.
 export async function updateSuggestion(id, data) {
+  // 'data.status' now comes directly from the dropdown which uses valid backend values:
+  // 'resolved', 'rejected', 'pending'
   return apiFetch(`/api/v1/admin/suggestions/${id}/respond`, {
     method: 'POST',
     body: JSON.stringify({
@@ -251,6 +297,13 @@ export async function updateSuggestion(id, data) {
 // ── Routing & Geometry ────────────────────────────────────────────────────────
 export async function getRouteGeometry() {
   return apiFetch('/api/v1/route_geometry');
+}
+
+// Recompute the planned-route geometry (both directions) after a stop is
+// added, moved, or removed. Without this the drawn route line + the
+// gps-ingestion snap route stay stale until the 24h cache TTL expires.
+export async function refreshRouteGeometry() {
+  return apiFetch('/api/v1/admin/refresh_route_geometry', { method: 'POST' });
 }
 
 export async function getRouteSegment(lat1, lon1, lat2, lon2) {

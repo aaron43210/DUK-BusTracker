@@ -7,20 +7,107 @@ reconstructs logical trips, and trains the Day 1 ETA Machine Learning model.
 """
 import os
 import sys
+import json
 import subprocess
+import shlex
+import pathlib
 import pandas as pd
 from sqlalchemy import create_engine, text
 from datetime import timedelta
+import logging
 
-SQL_FILE = "/Users/aaronr/Desktop/DUK_MICRO/gps_realtime_rows.sql"
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://duk_user:password123@localhost:5432/duk_bus")
+logger = logging.getLogger(__name__)
+
+# Validate required environment variable — no insecure fallback
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    logger.error("DATABASE_URL environment variable is required")
+    sys.exit(1)
 
 # Ensure we use psycopg2 for pandas/sqlalchemy
 if DATABASE_URL.startswith("postgresql+asyncpg://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
 
+# SQL file path must be explicitly provided — no hardcoded developer paths
+SQL_FILE = os.environ.get("HISTORICAL_SQL_FILE")
+if not SQL_FILE:
+    logger.error("HISTORICAL_SQL_FILE environment variable is required")
+    sys.exit(1)
+
+# Validate the path exists and is within an allowed directory
+ALLOWED_DATA_DIR = pathlib.Path(os.environ.get("DATA_DIR", "/opt/duk/data")).resolve()
+sql_path = pathlib.Path(SQL_FILE).resolve()
+
+if not sql_path.is_file():
+    logger.error("SQL file not found: %s", sql_path)
+    sys.exit(1)
+
+# Path traversal check — ensure file is within allowed directory
+if not str(sql_path).startswith(str(ALLOWED_DATA_DIR)):
+    logger.error("SQL file must be within DATA_DIR: %s", ALLOWED_DATA_DIR)
+    sys.exit(1)
+
+def validate_sql_file(filepath: str) -> bool:
+    """Ensure the SQL dump doesn't contain malicious commands before execution."""
+    disallowed_keywords = [
+        "DROP ", "DELETE FROM", "ALTER TABLE", "GRANT ", "REVOKE ", "TRUNCATE ", "UPDATE "
+    ]
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                upper_line = line.upper()
+                for keyword in disallowed_keywords:
+                    if keyword in upper_line:
+                        logger.error("Malicious SQL keyword '%s' detected on line %d. Aborting.", keyword, line_num)
+                        return False
+    except Exception as e:
+        logger.error("Failed to read SQL file for validation: %s", e)
+        return False
+    return True
+
+def import_sql_safely(sql_file: str, database_url: str) -> bool:
+    """
+    Import SQL using psql subprocess instead of executing arbitrary text via SQLAlchemy.
+    This limits execution to INSERT statements only via --single-transaction.
+    """
+    if not validate_sql_file(sql_file):
+        logger.error("SQL validation failed. Refusing to import.")
+        return False
+    from urllib.parse import urlparse
+    parsed = urlparse(database_url)
+    
+    env = os.environ.copy()
+    env["PGPASSWORD"] = parsed.password or ""
+    
+    cmd = [
+        "psql",
+        "-h", parsed.hostname,
+        "-p", str(parsed.port or 5432),
+        "-U", parsed.username,
+        "-d", parsed.path.lstrip("/"),
+        "--single-transaction",
+        "--set", "ON_ERROR_STOP=1",
+        "-f", sql_file,
+    ]
+    
+    result = subprocess.run(
+        cmd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    
+    if result.returncode != 0:
+        logger.error("psql import failed: %s", result.stderr[:500])
+        return False
+    
+    logger.info("SQL imported successfully")
+    return True
+
+
 def main():
-    print("🚀 Starting Historical Data Import and Smart Filtering...")
+    print(" Starting Historical Data Import and Smart Filtering...")
 
     engine = create_engine(DATABASE_URL)
     
@@ -29,43 +116,37 @@ def main():
     # We will just run the migration script if needed, or assume it's created.
     
     # 2. Import raw SQL data
-    print(f"📥 Importing raw GPS data from {SQL_FILE}...")
-    try:
-        # Read the file
-        with open(SQL_FILE, 'r') as f:
-            sql_content = f.read()
-        
-        # Execute using SQLAlchemy connection
-        with engine.begin() as conn:
-            # We wrap it in a try-except block just in case it's already imported
-            try:
-                conn.execute(text(sql_content))
-                print("✅ Raw SQL imported successfully.")
-            except Exception as e:
-                print(f"⚠️ SQL execution returned a warning (maybe duplicate IDs): {e}")
-                print("Continuing with the assumption data is in the DB...")
-    except FileNotFoundError:
-        print(f"❌ Could not find {SQL_FILE}. Make sure the path is correct.")
+    print(f" Importing raw GPS data from {SQL_FILE}...")
+    if not import_sql_safely(SQL_FILE, DATABASE_URL):
+        print(f" Failed to import {SQL_FILE}.")
         sys.exit(1)
 
     # 3. Spatial and Temporal Filtering
-    print("🧹 Cleaning data: Applying spatial bounding box and time filters...")
+    print(" Cleaning data: Applying spatial bounding box and time filters...")
     
     # The bounding box of the OSRM Trivandrum extract
-    LAT_MIN, LAT_MAX = 8.20, 8.70
-    LON_MIN, LON_MAX = 76.50, 77.30
+    BOUNDS = {
+        "lat_min": 8.20,
+        "lat_max": 8.70,
+        "lon_min": 76.50,
+        "lon_max": 77.30,
+    }
     
-    query = f"""
+    query = text("""
         SELECT * FROM gps_realtime 
-        WHERE lat BETWEEN {LAT_MIN} AND {LAT_MAX}
-        AND lon BETWEEN {LON_MIN} AND {LON_MAX}
+        WHERE lat BETWEEN :lat_min AND :lat_max
+        AND lon BETWEEN :lon_min AND :lon_max
         ORDER BY ist_time ASC
-    """
-    df = pd.read_sql(query, engine)
+    """)
+    
+    with engine.connect() as conn:
+        result = conn.execute(query, BOUNDS)
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        
     print(f"   ↳ Found {len(df)} points inside the valid geographical bounding box.")
 
     if df.empty:
-        print("❌ No valid GPS data found after filtering.")
+        print(" No valid GPS data found after filtering.")
         sys.exit(1)
 
     # Convert to datetime
@@ -138,7 +219,6 @@ def main():
         
     df_mock_trips = pd.DataFrame(mock_trips)
     # Write directly to trips table (will fail if schema is strict, but we can do it raw)
-    import json
     with engine.begin() as conn:
         for _, row in df_mock_trips.iterrows():
             conn.execute(text("""
@@ -171,10 +251,10 @@ def main():
                 "max_t": max_t
             })
 
-    print("✅ Historical database perfectly primed.")
+    print(" Historical database perfectly primed.")
 
     # 6. Trigger Training
-    print("\n🧠 Triggering Day 1 ML Training Script...")
+    print("\n Triggering Day 1 ML Training Script...")
     train_script = os.path.join(os.path.dirname(__file__), "..", "services", "eta-ml-service", "train.py")
     
     # Pass the DB URL to the subprocess
@@ -184,9 +264,9 @@ def main():
     result = subprocess.run([sys.executable, train_script], env=env)
     
     if result.returncode == 0:
-        print("\n🎉 Success! The Day 1 ETA Machine Learning model is trained and ready.")
+        print("\n Success! The Day 1 ETA Machine Learning model is trained and ready.")
     else:
-        print("\n⚠️ Training script encountered an issue.")
+        print("\n Training script encountered an issue.")
 
 if __name__ == "__main__":
     main()

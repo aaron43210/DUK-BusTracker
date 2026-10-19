@@ -10,7 +10,7 @@ class GPSAnimator {
     this.onSegmentFinished = options.onSegmentFinished; // Callback to commit trail
 
     //  Tuning 
-    this.CLUSTER_RADIUS_M   = options.clusterRadiusM   ?? 15;   // treat as "same spot" below this
+    this.CLUSTER_RADIUS_M   = options.clusterRadiusM   ?? 5;    // treat as "same spot" below this (small so slow buses still animate)
     this.MAX_ANIM_DURATION  = options.maxAnimDuration  ?? 8000; // cap animation length (ms) 
     this.MIN_ANIM_DURATION  = options.minAnimDuration  ?? 800;  // floor, avoid instant snaps
     this.FETCH_ROAD_SEGMENT = options.fetchRoadSegment ?? true; // follow real road shape
@@ -33,7 +33,7 @@ class GPSAnimator {
    * Call this every time a new GPS point arrives from the WebSocket.
    * Does NOT move the marker immediately — just queues it.
    */
-  pushPoint(lat, lon, serverTimeIso) {
+  pushPoint(lat, lon, serverTimeIso, precomputedOsrmPath) {
     const timestamp = serverTimeIso ? new Date(serverTimeIso).getTime() : Date.now();
 
     // First point ever — place marker directly, nothing to animate from
@@ -44,7 +44,7 @@ class GPSAnimator {
       return;
     }
 
-    this.queue.push({ lat, lon, timestamp });
+    this.queue.push({ lat, lon, timestamp, precomputedOsrmPath });
 
     if (!this.animating) {
       this._processQueue();
@@ -63,11 +63,17 @@ class GPSAnimator {
       this.currentPos.lat, this.currentPos.lon, next.lat, next.lon
     );
 
-    //  Clustering: if the bus barely moved, don't animate — just settle 
+    //  Clustering: if the bus barely moved, don't animate — just settle
     if (distM < this.CLUSTER_RADIUS_M) {
-      // Nudge slightly toward it (in case of long-term drift) but no travel animation
-      this.currentPos = { lat: next.lat, lon: next.lon };
-      this.onPositionUpdate([next.lon, next.lat]);
+      // Bus is essentially stationary. Teleporting to each jittery fix is what
+      // makes the marker "shake" at a stop, so instead of snapping we apply a
+      // gentle EMA nudge (sub-metre at this range) and hold otherwise.
+      const a = 0.15;
+      this.currentPos = {
+        lat: this.currentPos.lat + (next.lat - this.currentPos.lat) * a,
+        lon: this.currentPos.lon + (next.lon - this.currentPos.lon) * a,
+      };
+      this.onPositionUpdate([this.currentPos.lon, this.currentPos.lat]);
       this.lastPointTime = next.timestamp;
       // Immediately process any further queued points (they're likely also clustered)
       requestAnimationFrame(() => this._processQueue());
@@ -84,7 +90,11 @@ class GPSAnimator {
       [this.currentPos.lon, this.currentPos.lat],
       [next.lon, next.lat],
     ];
-    if (this.FETCH_ROAD_SEGMENT && this.segmentFetcher && distM > 20) {
+    
+    if (next.precomputedOsrmPath && next.precomputedOsrmPath.length >= 2) {
+      // Backend already calculated the route geometry, use it directly!
+      path = next.precomputedOsrmPath;
+    } else if (this.FETCH_ROAD_SEGMENT && this.segmentFetcher && distM > 30) {
       try {
         const roadPath = await this.segmentFetcher(
           this.currentPos.lat, this.currentPos.lon, next.lat, next.lon

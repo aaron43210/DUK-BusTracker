@@ -10,4 +10,7 @@ ENV PYTHONPATH="${PYTHONPATH}:/app/libs"
 
 COPY services/trip-lifecycle/ .
 
+RUN useradd -m appuser && chown -R appuser /app
+USER appuser
+
 CMD ["python", "consumer.py"]

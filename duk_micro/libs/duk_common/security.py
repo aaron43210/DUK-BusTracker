@@ -9,7 +9,6 @@ Provides:
 """
 import hmac
 import logging
-from typing import Optional
 
 from redis.asyncio import Redis
 
@@ -24,50 +23,50 @@ logger = logging.getLogger(__name__)
 #
 # Keys:   KEYS[1] = the rate-limit sorted-set key
 # Args:   ARGV[1] = now (float seconds as string)
-#         ARGV[2] = window_start (float seconds as string)
+#         ARGV[2] = window (float seconds as string)
 #         ARGV[3] = max_requests (int as string)
 #         ARGV[4] = window_seconds + 1 (TTL, int as string)
 #         ARGV[5] = unique member = now + random suffix (avoids score collision)
 #
-# Returns: {current_count_AFTER_add, 1-if-allowed-else-0}
+# Returns: {current_count_AFTER_add, 1-if-allowed-else-0, retry_after_seconds}
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_LUA = """
 local key          = KEYS[1]
 local now          = tonumber(ARGV[1])
-local window_start = tonumber(ARGV[2])
+local window       = tonumber(ARGV[2])
 local max_req      = tonumber(ARGV[3])
 local ttl          = tonumber(ARGV[4])
 local member       = ARGV[5]
 
+local window_start = now - window
+
+-- Remove elements exactly at or before window_start
 redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
 local count = redis.call('ZCARD', key)
 
 if count >= max_req then
-    return {count, 0}
+    -- Find the oldest score in the window to calculate when it expires
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    local retry_after = window
+    if #oldest > 0 then
+        local oldest_score = tonumber(oldest[2])
+        retry_after = math.max(1, math.ceil(oldest_score + window - now))
+    end
+    return {count, 0, retry_after}
 end
 
 redis.call('ZADD', key, now, member)
 redis.call('EXPIRE', key, ttl)
-return {count + 1, 1}
+return {count + 1, 1, 0}
 """
 
 
 def constant_time_compare(val1: str, val2: str) -> bool:
     """
     Compares two strings in constant time to prevent timing attacks.
-
-    Input:
-        val1 - First string (e.g., the key provided in the request)
-        val2 - Second string (e.g., the expected secret key)
-
-    Output:
-        True if strings match, False otherwise
-
-    Why this matters:
-        A normal `val1 == val2` check returns faster when strings differ early.
-        An attacker can measure these tiny timing differences to guess secrets
-        character by character. hmac.compare_digest always takes the same time.
     """
+    if not isinstance(val1, str) or not isinstance(val2, str):
+        return False
     return hmac.compare_digest(
         val1.encode("utf-8"),
         val2.encode("utf-8"),
@@ -77,15 +76,6 @@ def constant_time_compare(val1: str, val2: str) -> bool:
 class RateLimiter:
     """
     Atomic sliding-window rate limiter backed by a Redis Lua script.
-
-    The entire check-and-record operation is atomic, eliminating the race
-    condition present in a multi-step pipeline approach.
-
-    Example usage:
-        limiter = RateLimiter(redis, "auth:otp", max_requests=3, window_seconds=300)
-        allowed, remaining = await limiter.check(identifier="192.168.1.1")
-        if not allowed:
-            raise HTTPException(429, "Too many requests")
     """
 
     def __init__(
@@ -95,13 +85,13 @@ class RateLimiter:
         max_requests: int,
         window_seconds: int,
     ):
-        """
-        Input:
-            redis          - Active Redis connection
-            key_prefix     - Namespace for Redis keys (e.g., "auth:otp", "gps:http")
-            max_requests   - Maximum allowed requests in the time window
-            window_seconds - Length of the sliding window in seconds
-        """
+        if not key_prefix or not key_prefix.strip():
+            raise ValueError("key_prefix must not be empty")
+        if max_requests <= 0:
+            raise ValueError("max_requests must be greater than zero")
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be greater than zero")
+            
         self.redis = redis
         self.key_prefix = key_prefix
         self.max_requests = max_requests
@@ -109,27 +99,27 @@ class RateLimiter:
         # Pre-register the script so Redis can cache it by SHA
         self._script = redis.register_script(_RATE_LIMIT_LUA)
 
-    async def check(self, identifier: str) -> tuple[bool, int]:
+    async def check(self, identifier: str) -> tuple[bool, int, int]:
         """
         Atomically checks and records a request for the given identifier.
 
-        Input:
-            identifier - Usually the client's IP address (or IP+email composite)
-
-        Output:
-            (allowed: bool, remaining: int)
-              - allowed   = True if the request should proceed
-              - remaining = How many more requests are allowed this window
-
-        The Lua script runs atomically inside Redis, preventing the TOCTOU
-        race that existed in the previous pipeline-based implementation.
+        Returns:
+            (allowed: bool, remaining: int, retry_after: int)
         """
+        if not identifier:
+            raise ValueError("identifier must not be empty")
+        if len(identifier) > 512:
+            raise ValueError("identifier too long")
+            
         import time
         import secrets as _secrets
+        import hashlib
 
-        key = f"ratelimit:{self.key_prefix}:{identifier}"
+        # Hash the identifier so raw emails/IPs are obfuscated and bounded
+        hashed_id = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
+        key = f"ratelimit:{self.key_prefix}:{hashed_id}"
+        
         now = time.time()
-        window_start = now - self.window_seconds
         # Unique member prevents score collisions between simultaneous requests
         member = f"{now}:{_secrets.token_hex(4)}"
 
@@ -137,67 +127,55 @@ class RateLimiter:
             keys=[key],
             args=[
                 str(now),
-                str(window_start),
+                str(self.window_seconds),
                 str(self.max_requests),
                 str(self.window_seconds + 1),
                 member,
             ],
         )
-        count_after, allowed_int = int(result[0]), int(result[1])
+        count_after = int(result[0])
+        allowed_int = int(result[1])
+        retry_after = int(result[2])
+        
         allowed = bool(allowed_int)
         remaining = max(0, self.max_requests - count_after)
-        return allowed, remaining
+        return allowed, remaining, retry_after
 
     async def reset(self, identifier: str) -> None:
         """
-        Clears the rate limit counter for an identifier (e.g., after successful OTP verify).
-
-        Input:  identifier - The IP or key to reset
-        Output: nothing
+        Clears the rate limit counter for an identifier.
         """
-        key = f"ratelimit:{self.key_prefix}:{identifier}"
+        import hashlib
+        if not identifier:
+            return
+        hashed_id = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
+        key = f"ratelimit:{self.key_prefix}:{hashed_id}"
         await self.redis.delete(key)
 
 
 class TokenBlocklist:
     """
     JWT revocation list stored in Redis.
-
-    When a user logs out, their token's JTI (unique token ID) is added here.
-    Every authenticated request checks this list before processing.
-
-    The blocklist entry auto-expires when the token would have expired anyway,
-    so the Redis key is self-cleaning.
     """
 
     def __init__(self, redis: Redis):
-        """
-        Input:
-            redis - Active Redis connection
-        """
         self.redis = redis
 
     async def revoke(self, jti: str, expires_in_seconds: int) -> None:
         """
         Adds a token JTI to the blocklist.
-
-        Input:
-            jti                 - The JWT ID from the token's payload ("jti" claim)
-            expires_in_seconds  - How long to keep this entry (match the token's TTL)
-
-        Output: nothing
         """
+        if not jti or len(jti) > 256:
+            raise ValueError("Invalid JWT ID")
+        if expires_in_seconds <= 0:
+            raise ValueError("expires_in_seconds must be greater than zero")
+            
         await self.redis.set(f"blocklist:jti:{jti}", "1", ex=expires_in_seconds)
 
     async def is_revoked(self, jti: str) -> bool:
         """
         Checks if a token has been revoked.
-
-        Input:
-            jti - The JWT ID to check
-
-        Output:
-            True if the token was revoked (reject the request)
-            False if the token is still valid
         """
-        return await self.redis.exists(f"blocklist:jti:{jti}") > 0
+        if not jti:
+            return False
+        return bool(await self.redis.exists(f"blocklist:jti:{jti}"))

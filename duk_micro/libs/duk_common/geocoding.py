@@ -1,15 +1,16 @@
-# libs/duk_common/geocoding.py
 """
-Reverse geocoding: converts GPS coordinates → human-readable location name.
+libs/duk_common/geocoding.py
 
-Strategy (fast + no API rate limits):
+Shared geocoding utility for converting GPS coordinates into human-readable locations.
+
+Architecture:
   1. Check Redis cache first (instant, ~0ms)
      - Cache key: "geocode:{lat_rounded}:{lon_rounded}" at ~111m grid resolution
      - TTL: 24 hours (Nominatim names don't change often)
 
   2. If cache miss → spawn background Nominatim fetch (async, doesn't block the GPS pipeline)
      - Nominatim is OpenStreetMap's free geocoding API
-     - A lock prevents 10 simultaneous services all calling Nominatim for the same point
+     - A distributed lock prevents 10 simultaneous services all calling Nominatim for the same point
      - Result is stored in Redis so future requests hit the cache
 
   3. While Nominatim is loading → instantly fall back to local OSRM
@@ -22,8 +23,9 @@ area are served from Redis (instant). Nominatim is only called once per grid cel
 """
 import logging
 import asyncio
-import atexit
 import httpx
+import math
+import uuid
 from redis.asyncio import Redis
 from typing import Optional
 from libs.duk_common.osrm_client import get_osrm_street_name
@@ -43,45 +45,40 @@ def _get_nominatim_client() -> httpx.AsyncClient:
             headers={"User-Agent": "DUK-Bus-Tracker/1.0 (internal-service)"},
             timeout=httpx.Timeout(connect=3.0, read=5.0, write=2.0, pool=2.0),
             limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            trust_env=False,  # ignore ambient HTTP(S)_PROXY / env — no request redirection
         )
     return _NOMINATIM_CLIENT
 
 
-def _close_nominatim_client():
-    """Best-effort close on process exit — avoids unclosed-socket warnings."""
-    import asyncio as _asyncio
+async def close_geocoding_client():
+    """Explicitly closes the shared Nominatim HTTP client.
+    Should be called during graceful application shutdown (e.g., FastAPI lifespan).
+    """
+    global _NOMINATIM_CLIENT
     client = _NOMINATIM_CLIENT
     if client and not client.is_closed:
         try:
-            loop = _asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(client.aclose())
-            else:
-                loop.run_until_complete(client.aclose())
-        except Exception:
-            pass
+            await client.aclose()
+        except Exception as e:
+            logger.warning("[GEOCODING] Error closing Nominatim client: %s", e)
+        finally:
+            _NOMINATIM_CLIENT = None
 
 
-atexit.register(_close_nominatim_client)
-
-
-async def fetch_nominatim_background(lat: float, lon: float, redis: Redis, cache_key: str) -> None:
+async def fetch_nominatim_background(
+    lat: float, lon: float, redis: Redis, cache_key: str, lock_key: str, lock_token: str
+) -> None:
     """
     Fetches a location name from OpenStreetMap Nominatim API and caches the result.
-
-    Input:
-        lat       - Latitude (e.g., 8.5581)
-        lon       - Longitude (e.g., 76.9061)
-        redis     - Active Redis connection for writing the cache
-        cache_key - The Redis key to store the result under
-
-    Output: nothing (stores result in Redis as a side effect)
-
-    This runs as a background asyncio task so it never blocks the GPS data pipeline.
-    The best available address field is selected in priority order:
-      neighbourhood → suburb → village → road → town → city_district → display_name
+    Uses an outer try/finally to safely release the unique distributed lock upon completion.
     """
     try:
+        # Enforce Nominatim 1 req/s global rate limit to comply with TOS
+        acquired = await redis.set("nominatim:rate_limit", "1", nx=True, px=1000)
+        if not acquired:
+            logger.debug("[GEOCODING] Nominatim rate limit exceeded (1 req/s), skipping.")
+            return
+
         client = _get_nominatim_client()
         resp = await client.get(
             "/reverse",
@@ -92,22 +89,50 @@ async def fetch_nominatim_background(lat: float, lon: float, redis: Redis, cache
             address = data.get("address", {})
 
             # Pick the most human-readable name, in order of preference
-            name = (
-                address.get("neighbourhood") or
-                address.get("suburb") or
-                address.get("village") or
-                address.get("road") or
-                address.get("town") or
-                address.get("city_district") or
-                data.get("display_name", "").split(",")[0]
-            )
+            display_name = data.get("display_name", "")
+
+            # 1. Custom Overrides for Important Campuses
+            if "Digital University" in display_name or "DUK" in display_name:
+                name = "Digital University Kerala"
+            elif "CPTC" in display_name or "Central Polytechnic" in display_name:
+                name = "CPTC College"
+            else:
+                # 2. General Grid Location Name (Removed roads and residential)
+                name = (
+                    address.get("neighbourhood") or
+                    address.get("suburb") or
+                    address.get("village") or
+                    address.get("town") or
+                    address.get("city_district") or
+                    display_name.split(",")[0]
+                )
 
             if name:
                 # Cache for 24 hours — location names rarely change
                 await redis.setex(cache_key, 86400, name)
-                logger.debug(f"[GEOCODING] Nominatim result cached: {name}")
+                logger.debug("[GEOCODING] Nominatim result cached: %s", name)
+        else:
+            # Do not log the response body: Nominatim error bodies can contain
+            # address/location detail tied to a live GPS coordinate (PII).
+            logger.warning(
+                "[GEOCODING] Nominatim returned HTTP %s",
+                resp.status_code,
+            )
     except Exception as e:
-        logger.warning(f"[GEOCODING] Nominatim request failed: {e}")
+        logger.warning("[GEOCODING] Nominatim request failed: %s", e)
+    finally:
+        # Release the lock safely using Lua to ensure we only delete our own lock
+        lua_script = """
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("del", KEYS[1])
+        else
+            return 0
+        end
+        """
+        try:
+            await redis.eval(lua_script, 1, lock_key, lock_token)
+        except Exception as e:
+            logger.warning("[GEOCODING] Failed to release Redis lock: %s", e)
 
 
 async def get_location_name(
@@ -118,42 +143,36 @@ async def get_location_name(
 ) -> Optional[str]:
     """
     Returns a human-readable location name for the given GPS coordinates.
-
-    Input:
-        lat          - Latitude (e.g., 8.5581)
-        lon          - Longitude (e.g., 76.9061)
-        redis        - Active Redis connection
-        wait_timeout - Seconds to wait for a fresh Nominatim result before falling back.
-                       0.0 (default) = return immediately with OSRM fallback if cache is empty.
-                       1.5 = wait up to 1.5 seconds for Nominatim (used on first API call to /latest)
-
-    Output:
-        str  - Location name (e.g., "Pongumoodu", "NH66", "Kazhakuttam")
-        None - If no name can be determined from any source
-
-    How it works:
-        Step 1: Check Redis cache → if found, return instantly
-        Step 2: Spawn background Nominatim fetch (only if no other service already fetched it)
-        Step 3: If wait_timeout > 0, wait briefly for Nominatim to finish
-        Step 4: Fall back to local OSRM for an instant road name
     """
+    if wait_timeout < 0:
+        raise ValueError("wait_timeout must be >= 0")
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        raise ValueError("Invalid GPS coordinates")
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        raise ValueError("Invalid GPS coordinates")
+
     # Round coordinates to 3 decimal places (~111m grid) for cache sharing
     cache_key = f"geocode:{round(lat, 3)}:{round(lon, 3)}"
 
     # Step 1: Check Redis cache
     cached = await redis.get(cache_key)
     if cached:
-        return cached
+        # Ensure we decode bytes if Redis client doesn't use decode_responses
+        return cached.decode("utf-8") if isinstance(cached, bytes) else cached
 
     # Step 2: Use a distributed lock to prevent multiple services from all calling
     # Nominatim simultaneously for the same location (would waste API quota)
     lock_key = f"lock:{cache_key}"
-    is_locked = await redis.setnx(lock_key, "1")   # Returns 1 only if key didn't exist
+    lock_token = uuid.uuid4().hex
+    
+    # Atomic SET NX EX
+    is_locked = await redis.set(lock_key, lock_token, nx=True, ex=10)
 
     task = None
     if is_locked:
-        await redis.expire(lock_key, 10)   # Auto-release lock after 10 seconds
-        task = asyncio.create_task(fetch_nominatim_background(lat, lon, redis, cache_key))
+        task = asyncio.create_task(
+            fetch_nominatim_background(lat, lon, redis, cache_key, lock_key, lock_token)
+        )
 
     # Step 3: Optionally wait for Nominatim result (used on fresh /latest API calls)
     if wait_timeout > 0.0:
@@ -164,17 +183,19 @@ async def get_location_name(
             except asyncio.TimeoutError:
                 pass   # Nominatim was slow — continue with OSRM fallback
         else:
-            # Another task is already fetching — poll Redis briefly
-            for _ in range(int(wait_timeout * 10)):
+            # Another task is already fetching — poll Redis precisely
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + wait_timeout
+            while loop.time() < deadline:
                 await asyncio.sleep(0.1)
                 cached = await redis.get(cache_key)
                 if cached:
-                    return cached
+                    return cached.decode("utf-8") if isinstance(cached, bytes) else cached
 
         # Check one final time after the wait
         cached = await redis.get(cache_key)
         if cached:
-            return cached
+            return cached.decode("utf-8") if isinstance(cached, bytes) else cached
 
     # Step 4: Instant fallback — ask local OSRM for the nearest road name
     # This is always available (OSRM runs locally) but gives road names, not area names

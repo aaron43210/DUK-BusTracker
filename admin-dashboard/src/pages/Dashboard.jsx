@@ -1,25 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getLatestGps, getTripState, getStops, getRouteGeometry, getRouteSegment, getTripTrace, getWsBusUrl } from '../api.js';
+import { getLatestGps, getTripState, getStops, getRouteGeometry, getRouteSegment, getTripTrace, getWsBusUrl, clearToken } from '../api.js';
 import GPSAnimator from '../utils/gpsAnimator.js';
 import TrailManager from '../utils/trailManager.js';
 import { useToast } from '../App.jsx';
-import { loadMapLibre, haversineDistKm } from '../utils.js';
+import { loadMapLibre } from '../utils.js';
 import busSvgRaw from '../assets/bus.svg?raw';
-
-function statusBadge(status) {
-  const map = {
-    active: { cls: 'badge-green', label: 'Active' },
-    on_trip: { cls: 'badge-green', label: 'Active' },
-    connecting: { cls: 'badge-yellow', label: 'Connecting...' },
-    waiting: { cls: 'badge-blue', label: 'Waiting', fontSize: '14px' },
-    completed: { cls: 'badge-gray', label: 'Completed' },
-    offline: { cls: 'badge-gray', label: 'Offline' },
-    cancelled: { cls: 'badge-red', label: 'Cancelled' },
-    late: { cls: 'badge-yellow', label: 'Late' },
-  };
-  const s = map[status] || { cls: 'badge-gray', label: 'Unknown' };
-  return <span className={`badge ${s.cls}`}>{s.label}</span>;
-}
 
 
 class CenterBusControl {
@@ -111,9 +96,13 @@ function buildMapLive(containerId, busLat, busLon, isLive, stops, mapRef, marker
     (stops || []).forEach(s => {
       const el = document.createElement('div');
       el.style.cssText = 'width:10px;height:10px;background:#2563eb;border-radius:50%;border:2px solid white;cursor:pointer';
+      // Build the popup via DOM text (not setHTML) so a stop name can never
+      // inject markup — guards against stored XSS from admin-entered stop names.
+      const popupEl = document.createElement('strong');
+      popupEl.textContent = s.name ?? '';
       new window.maplibregl.Marker({ element: el })
         .setLngLat([s.lon, s.lat])
-        .setPopup(new window.maplibregl.Popup({ offset: 10 }).setHTML(`<strong>${s.name}</strong>`))
+        .setPopup(new window.maplibregl.Popup({ offset: 10 }).setDOMContent(popupEl))
         .addTo(map);
     });
   }
@@ -193,6 +182,16 @@ export default function Dashboard() {
   const isAutoCenterRef = useRef(true);
   const animatorRef = useRef(null);
   const trailManagerRef = useRef(null);
+  const tripStateRef = useRef(null);
+
+  // Keep tripStateRef in sync with tripState so the WS onmessage handler
+  // always reads the latest value without a one-render stale window.
+  // We use a ref-setter wrapper instead of useEffect to guarantee the ref is
+  // updated atomically with state, before any subsequent re-renders fire.
+  const setTripStateAndRef = (val) => {
+    tripStateRef.current = typeof val === 'function' ? val(tripStateRef.current) : val;
+    setTripState(val);
+  };
 
   useEffect(() => {
     isAutoCenterRef.current = autoCenter;
@@ -255,7 +254,13 @@ export default function Dashboard() {
     }
 
     return () => {
-      if (animatorRef.current) animatorRef.current.destroy();
+      if (animatorRef.current) {
+        animatorRef.current.destroy();
+        animatorRef.current = null;
+      }
+      if (trailManagerRef.current) {
+        trailManagerRef.current = null;
+      }
     };
   }, [tripState?.trip_id]);
 
@@ -269,7 +274,7 @@ export default function Dashboard() {
       ]);
 
       setGps(gpsData);
-      setTripState(tripData);
+      setTripStateAndRef(tripData);
       setStops(stopsData);
 
       if (gpsData?.lat && gpsData?.lon) {
@@ -309,43 +314,65 @@ export default function Dashboard() {
     const pollInterval = setInterval(async () => {
       try {
         const tripData = await getTripState().catch(() => null);
-        if (tripData) setTripState(tripData);
+        if (tripData) setTripStateAndRef(tripData);
       } catch (_) {}
     }, 15000); // 15s instead of 5s
 
-    const wsUrl = getWsBusUrl();
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let reconnectTimeout = null;
 
-    ws.onopen = () => setWsStatus('Live');
-    ws.onclose = () => setWsStatus('Offline');
+    const connectWs = () => {
+      const wsUrl = getWsBusUrl();
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-
-        if (data.type === 'gps' && data.lat && data.lon) {
-          setGps(prev => ({ ...prev, lat: data.lat, lon: data.lon, speed_kmh: data.speed_kmh, server_time: data.server_time, is_live: true }));
-          
-          if (animatorRef.current) {
-            animatorRef.current.pushPoint(data.lat, data.lon, data.server_time);
-          }
-          
-          if (trailManagerRef.current && tripState?.status !== 'completed' && isScheduledTrip(tripState?.trip)) {
-            trailManagerRef.current.addLivePoint(data.lat, data.lon);
-          }
-
-          const busDot = document.getElementById('bus-dot');
-          if (busDot) {
-            busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', '#16a34a'));
-          }
+      ws.onopen = () => setWsStatus('Live');
+      ws.onclose = (e) => {
+        setWsStatus('Offline');
+        // 4001 = session revoked, 4003 = token missing/undecodable/expired.
+        // The admin session is no longer valid, so stop reconnecting every 3s
+        // forever and send the admin back to login (mirrors api.js on 401/403).
+        if (e && (e.code === 4001 || e.code === 4003)) {
+          clearToken();
+          window.location.href = import.meta.env.VITE_ADMIN_BASE_PATH || '/';
+          return;
         }
-      } catch (_) { }
+        reconnectTimeout = setTimeout(connectWs, 3000);
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'gps' && data.lat && data.lon) {
+            setGps(prev => ({ ...prev, lat: data.lat, lon: data.lon, speed_kmh: data.speed_kmh, server_time: data.server_time, is_live: true }));
+            
+            if (animatorRef.current) {
+              animatorRef.current.pushPoint(data.lat, data.lon, data.server_time);
+            }
+            
+            const currentTrip = tripStateRef.current;
+            if (trailManagerRef.current && currentTrip?.status !== 'completed' && isScheduledTrip(currentTrip?.trip)) {
+              trailManagerRef.current.addLivePoint(data.lat, data.lon);
+            }
+
+            const busDot = document.getElementById('bus-dot');
+            if (busDot) {
+              busDot.querySelectorAll('path').forEach(p => p.setAttribute('fill', '#16a34a'));
+            }
+          }
+        } catch (_) { }
+      };
     };
+
+    connectWs();
 
     return () => {
       clearInterval(pollInterval);
-      ws.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
     };
   }, []);
 
@@ -399,9 +426,13 @@ export default function Dashboard() {
 
       <div className="stats-row">
         <div className="stat-card">
-          <div className="stat-label" style={{ marginBottom: '8px', marginTop: 0 }}>Current Trip</div>
+          <div className="stat-label" style={{ marginBottom: '8px', marginTop: 0 }}>
+            {formatTripName(tripState?.trip) === 'Not In Service' || formatTripName(tripState?.trip) === 'Not in Service' ? 'Current Position' : 'Current Trip'}
+          </div>
           <div className="stat-val" style={{ fontSize: '16px', textTransform: 'capitalize', fontWeight: 700 }}>
-            {formatTripName(tripState?.trip)}
+            {formatTripName(tripState?.trip) === 'Not In Service' || formatTripName(tripState?.trip) === 'Not in Service' 
+              ? (gps?.location_name || 'Unknown Location') 
+              : formatTripName(tripState?.trip)}
           </div>
         </div>
 
@@ -458,9 +489,9 @@ export default function Dashboard() {
           <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>Live Position</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              {gps?.ist_time && (
+              {gps?.server_time && (
                 <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 'normal' }}>
-                  Last updated: {new Date(gps.ist_time).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  Last updated: {new Date(gps.server_time).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
                 </span>
               )}
             </div>

@@ -66,7 +66,7 @@ def create_engine(
         # NullPool creates a new connection per query — only for short-lived scripts
         return create_async_engine(url, echo=echo, poolclass=NullPool)
 
-    return create_async_engine(
+    engine = create_async_engine(
         url,
         echo=echo,
         pool_size=pool_size,
@@ -80,6 +80,29 @@ def create_engine(
             "server_settings": {"jit": "off"}     # Prevents asyncpg JIT conflicts
         },
     )
+
+    import logging
+    from sqlalchemy import event
+    logger = logging.getLogger("duk_micro.db_pool")
+
+    @event.listens_for(engine.sync_engine, "checkout")
+    def receive_checkout(dbapi_connection, connection_record, connection_proxy):
+        try:
+            pool = engine.pool
+            logger.debug("[DB_POOL] Checkout: %s checked out, %s checked in", pool.checkedout(), pool.checkedin())
+        except Exception as e:
+            logger.debug("[DB_POOL] Pool event logging failed: %s", e)
+
+    @event.listens_for(engine.sync_engine, "checkin")
+    def receive_checkin(dbapi_connection, connection_record):
+        try:
+            pool = engine.pool
+            # subtract 1 from checkedout because it's technically still checked out during the event
+            logger.debug("[DB_POOL] Checkin: %s checked out, %s checked in", max(0, pool.checkedout() - 1), pool.checkedin() + 1)
+        except Exception as e:
+            logger.debug("[DB_POOL] Pool event logging failed: %s", e)
+
+    return engine
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker:
@@ -96,6 +119,11 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker:
 
     expire_on_commit=False means objects stay usable after commit
     (important for async code where you might access attributes after await).
+    
+    Transaction Ownership:
+        This session factory does NOT automatically commit transactions.
+        Services remain strictly responsible for defining their own transaction boundaries
+        by explicitly calling `await session.commit()` or `await session.rollback()`.
     """
     return async_sessionmaker(
         engine,
@@ -120,6 +148,10 @@ async def get_db_dependency(session_factory: async_sessionmaker):
                 ...
 
     The session is automatically closed and rolled back on error.
+    
+    Transaction Ownership:
+        This dependency yields an uncommitted session. Endpoints and services
+        are responsible for manually calling `await db.commit()` when writes need to persist.
     """
     async def _get_db():
         async with session_factory() as session:

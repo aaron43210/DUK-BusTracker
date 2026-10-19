@@ -16,7 +16,7 @@ export default function Suggestions() {
   
   // Modal state
   const [respondItem, setRespondItem] = useState(null);
-  const [statusVal, setStatusVal] = useState('approved');
+  const [statusVal, setStatusVal] = useState('resolved');
   const [responseMsg, setResponseMsg] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -165,22 +165,25 @@ export default function Suggestions() {
                     </td>
                     <td>
                       <span className={`badge ${
-                        s.status === 'approved' ? 'badge-green' : 
+                        s.status === 'resolved' ? 'badge-green' : 
                         s.status === 'rejected' ? 'badge-red' : 
-                        s.status === 'will_consider' ? 'badge-blue' : 
+                        s.status === 'will_consider' || s.status === 'pending' ? 'badge-blue' : 
                         'badge-gray'
                       }`}>
-                        {s.status === 'will_consider' ? 'Will Consider' : s.status || 'Pending'}
+                        {s.status === 'will_consider' ? 'Will Consider' : 
+                         s.status === 'resolved' ? 'Resolved' :
+                         s.status === 'pending' ? 'Pending' :
+                         s.status || 'Pending'}
                       </span>
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: '6px', flexDirection: 'column', alignItems: 'center' }}>
-                        {s.status !== 'approved' && s.status !== 'rejected' && (
+                        {s.status !== 'resolved' && s.status !== 'rejected' && (
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={() => {
                               setRespondItem(s);
-                              setStatusVal(s.status === 'pending' ? 'approved' : s.status);
+                              setStatusVal(s.status === 'pending' ? 'resolved' : s.status);
                               setResponseMsg(s.admin_response || '');
                             }}
                           >
@@ -207,28 +210,30 @@ export default function Suggestions() {
       {/* Response Modal */}
       {respondItem && (
         <div className="modal-overlay open">
-          <div className="modal">
+          <div className="modal" role="dialog" aria-modal="true" aria-label={`Respond to Suggestion #${respondItem.id}`}>
             <div className="modal-header">
               <div className="modal-title">Respond to Suggestion #{respondItem.id}</div>
-              <button className="modal-close" onClick={() => setRespondItem(null)}>✕</button>
+              <button className="modal-close" onClick={() => setRespondItem(null)} aria-label="Close">✕</button>
             </div>
             
             <div className="form-group" style={{marginTop: '16px'}}>
-              <label className="form-label">Update Status</label>
+              <label className="form-label" htmlFor="suggestion-status">Update Status</label>
               <select 
+                id="suggestion-status"
                 className="form-input" 
                 value={statusVal} 
                 onChange={e => setStatusVal(e.target.value)}
               >
-                <option value="approved">Approved (Final)</option>
+                <option value="resolved">Approved (Final)</option>
                 <option value="rejected">Rejected (Final)</option>
-                <option value="will_consider">Will Consider</option>
+                <option value="pending">Will Consider</option>
               </select>
             </div>
             
             <div className="form-group">
-              <label className="form-label">Message to User (Optional)</label>
+              <label className="form-label" htmlFor="suggestion-response">Message to User (Optional)</label>
               <textarea 
+                id="suggestion-response"
                 className="form-input" 
                 rows="4"
                 placeholder="Write a response..."

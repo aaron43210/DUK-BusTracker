@@ -54,7 +54,20 @@ def send_fcm_notification_task(
     body: str,
     data: dict | None = None,
 ):
-    """Send FCM multicast push notification with retry."""
+    """Send FCM multicast push notification with retry.
+
+    Args:
+        tokens: List of FCM tokens to send the notification to.
+        title: Title of the notification.
+        body: Body text of the notification.
+        data: Optional dictionary containing additional data.
+
+    Returns:
+        dict: Dictionary with success and failure counts.
+
+    Raises:
+        self.retry: Retries the task on failure with exponential backoff.
+    """
     try:
         if not tokens:
             return {"success": 0, "failure": 0}
@@ -67,6 +80,32 @@ def send_fcm_notification_task(
             response.success_count,
             response.failure_count,
         )
+        
+        if response.failure_count > 0:
+            failed_tokens = []
+            for idx, resp in enumerate(response.responses):
+                if not resp.success:
+                    err_str = str(getattr(resp, 'exception', '')).lower()
+                    err_code = str(getattr(getattr(resp, 'exception', None), 'code', '')).lower()
+                    # Catch UnregisteredError, NOT_FOUND, or invalid token errors
+                    if 'unregistered' in err_str or 'invalid' in err_str or 'not_found' in err_code:
+                        failed_tokens.append(tokens[idx])
+                        
+            if failed_tokens:
+                try:
+                    from libs.duk_common.models import User
+                    from sqlalchemy import update
+                    with _get_session() as session:
+                        session.execute(
+                            update(User)
+                            .where(User.device_token.in_(failed_tokens))
+                            .values(device_token=None)
+                        )
+                        session.commit()
+                        logger.info("[TASK] Cleared %d invalid FCM tokens from DB", len(failed_tokens))
+                except Exception as db_exc:
+                    logger.error("[TASK] Failed to clear invalid tokens from DB: %s", db_exc)
+
         return {
             "success": response.success_count,
             "failure": response.failure_count,
@@ -90,8 +129,18 @@ def create_in_app_notification_task(
     body: str,
     notif_type: str = "general",
 ):
-    """Write an InAppNotification row using the shared module-level session."""
-    from models_local import InAppNotification
+    """Write an InAppNotification row using the shared module-level session.
+
+    Args:
+        user_id: User ID (optional).
+        title: Notification title.
+        body: Notification body.
+        notif_type: Notification type (default: "general").
+
+    Raises:
+        self.retry: Retries the task on failure with exponential backoff.
+    """
+    from libs.duk_common.models import InAppNotification
 
     try:
         with _get_session() as session:

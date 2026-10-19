@@ -3,13 +3,23 @@
 
 <head>
   <meta charset="UTF-8" />
+  <!-- Public-dir path: Vite prefixes it with the base (/duk/admin2026/). -->
   <link rel="icon" type="image/png" href="/duk.png" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="DUK Bus Tracker admin dashboard — routes, stops, trips and live tracking." />
   <title>DUK Bus Tracker — Admin Dashboard</title>
 </head>
 
 <body>
-  <div id="root"></div>
+  <!-- Static placeholder painted straight from the HTML while the JS bundle
+       downloads; React replaces it on first render. System font on purpose so
+       it doesn't pull the web font ahead of the app bundle. -->
+  <div id="root">
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f3f4f6;color:#5f6672;font:500 15px system-ui,-apple-system,'Segoe UI',sans-serif">
+      Loading DUK Bus Admin…
+    </div>
+  </div>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 

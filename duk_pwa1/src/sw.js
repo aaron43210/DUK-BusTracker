@@ -52,11 +52,11 @@ registerRoute(
  * These values are public client identifiers, not private secrets.
  */
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyA6-LuwDI5IQq6boL7hKcNTxNNYpwvRUAE",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "dukbus-bcf10.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "dukbus-bcf10",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "156522756954",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:156522756954:web:8af8b928849674293fd163"
 };
 
 if (firebaseConfig.apiKey && firebaseConfig.messagingSenderId) {
@@ -64,6 +64,13 @@ if (firebaseConfig.apiKey && firebaseConfig.messagingSenderId) {
   const messaging = getMessaging(firebaseApp);
 
   onBackgroundMessage(messaging, (payload) => {
+    // If the payload carries a `notification` block, the browser/FCM already
+    // displays it automatically. Showing it again here is what caused duplicate
+    // notifications. Only display manually for data-only messages.
+    if (payload.notification) {
+      return;
+    }
+
     const title =
       payload.notification?.title ||
       payload.data?.title ||
@@ -81,8 +88,8 @@ if (firebaseConfig.apiKey && firebaseConfig.messagingSenderId) {
 
     self.registration.showNotification(title, {
       body,
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
+      icon: './icon-192.png',
+      badge: './icon-192.png',
       tag,
       renotify: false,
       data: payload.data || {},

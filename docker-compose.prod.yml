@@ -1,0 +1,65 @@
+# =============================================================================
+# Production (host-network) deployment.
+#
+# TLS NOTE: these services run with network_mode: "host" and NO reverse proxy,
+# so core-api listens directly on the host port with plaintext HTTP. This file
+# does NOT terminate TLS. In production you MUST put TLS in front of it, one of:
+#   * the root docker-compose.yml Traefik gateway (ACME/Let's Encrypt), or
+#   * an external load balancer / nginx terminating HTTPS and proxying to
+#     127.0.0.1:<core-api port>.
+# HSTS is emitted by the app only when ENVIRONMENT=production AND the request is
+# already served over HTTPS, so the fronting layer above is required for it to
+# take effect. Do not expose core-api's plaintext port to the public internet.
+# =============================================================================
+services:
+  core-api:
+    image: duk_micro_unified:latest
+    build:
+      context: ./duk_micro
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - /opt/duk_micro/.env
+    environment:
+      - REDIS_URL=redis://127.0.0.1:6379/0
+      - OSRM_URL=http://127.0.0.1:5001
+      # Host networking: Redis/OSRM really are on loopback. Without this opt-in
+      # the ENVIRONMENT=production settings check rejects these URLs at import.
+      - ALLOW_LOOPBACK_SERVICES=true
+    network_mode: "host"
+    volumes:
+      - ./duk_micro/models:/app/models
+      - audit_logs:/app/logs
+      - /opt/duk_micro/firebase_creds.json:/opt/duk_micro/firebase_creds.json:ro
+
+  background-workers:
+    image: duk_micro_unified:latest
+    command: ["/bin/bash", "/app/start_workers.sh"]
+    restart: unless-stopped
+    env_file:
+      - /opt/duk_micro/.env
+    environment:
+      - REDIS_URL=redis://127.0.0.1:6379/0
+      - ALLOW_LOOPBACK_SERVICES=true
+    network_mode: "host"
+    volumes:
+      - ./duk_micro/models:/app/models
+      - /opt/duk_micro/firebase_creds.json:/opt/duk_micro/firebase_creds.json:ro
+      - mlflow_data:/mlflow
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    restart: unless-stopped
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 127.0.0.1
+      --port 5002
+    network_mode: "host"
+    volumes:
+      - mlflow_data:/mlflow
+
+volumes:
+  audit_logs:
+  mlflow_data:

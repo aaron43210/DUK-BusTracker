@@ -5,7 +5,7 @@ numpy
 redis
 scikit-learn==1.7.2
 SQLAlchemy
-aiosqlite
+
 asyncpg
 skl2onnx==1.17.0
 onnxmltools
