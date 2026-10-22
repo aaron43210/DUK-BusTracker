@@ -31,8 +31,11 @@ OSM_API_URL_NELLIMOODU = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_
 # frequently re-tagged in OSM. The static kerala.osm.pbf misses these updates and
 # causes OSRM to return NoSegment / fall back to straight-line Haversine for the
 # last leg into Thampanoor, making the route line "snap" incorrectly near Central.
-BBOX_THAMPANOOR = "76.940,8.480,76.965,8.510"
-OSM_API_URL_THAMPANOOR = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_THAMPANOOR}"
+# Split into two tiles — the full bbox exceeds OSM's 50k-node limit.
+BBOX_THAMPANOOR_W = "76.940,8.480,76.952,8.510"  # Thampanoor station / KSRTC bay
+BBOX_THAMPANOOR_E = "76.952,8.480,76.965,8.510"  # East Fort / Central
+OSM_API_URL_THAMPANOOR_W = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_THAMPANOOR_W}"
+OSM_API_URL_THAMPANOOR_E = f"https://api.openstreetmap.org/api/0.6/map?bbox={BBOX_THAMPANOOR_E}"
 
 # Restrict flyover decoupling to the NH66 flyover corridor (Kazhakuttam) so it can
 # never touch bridges elsewhere in the district. Format "minlon,minlat,maxlon,maxlat".
@@ -56,7 +59,8 @@ def fetch_osm(url, label):
 
 live_xml_data       = fetch_osm(OSM_API_URL_TECHNOPARK, "Technopark corridor")
 nellimoodu_xml_data = fetch_osm(OSM_API_URL_NELLIMOODU, "Nellimoodu corridor")
-thampanoor_xml_data = fetch_osm(OSM_API_URL_THAMPANOOR, "Thampanoor/East Fort corridor")
+thampanoor_w_xml_data = fetch_osm(OSM_API_URL_THAMPANOOR_W, "Thampanoor/West tile")
+thampanoor_e_xml_data = fetch_osm(OSM_API_URL_THAMPANOOR_E, "Thampanoor/East tile")
 
 if not live_xml_data:
     print(" FATAL: Technopark corridor OSM fetch failed. This corridor is on the bus "
@@ -65,8 +69,8 @@ if not live_xml_data:
     sys.exit(1)
 if not nellimoodu_xml_data:
     print(" WARNING: Nellimoodu corridor fetch failed — continuing without it (secondary).")
-if not thampanoor_xml_data:
-    print(" WARNING: Thampanoor/East Fort corridor fetch failed — OSRM may miss the "
+if not thampanoor_w_xml_data or not thampanoor_e_xml_data:
+    print(" WARNING: Thampanoor corridor partial fetch — OSRM may miss the "
           "last leg into Thampanoor and fall back to straight-line Haversine near Central.")
 
 print(" Parsing base OSM and live OSM trees...")
@@ -99,7 +103,8 @@ def merge_live_osm(xml_data, base_root):
 
 merge_live_osm(live_xml_data, base_root)
 merge_live_osm(nellimoodu_xml_data, base_root)
-merge_live_osm(thampanoor_xml_data, base_root)
+merge_live_osm(thampanoor_w_xml_data, base_root)
+merge_live_osm(thampanoor_e_xml_data, base_root)
 
 
 def decouple_flyover(base_root):
