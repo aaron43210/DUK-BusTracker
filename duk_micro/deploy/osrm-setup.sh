@@ -93,7 +93,7 @@ fi
 # file format written during processing matches the binary that serves requests.
 # Using `latest` for extract/partition and a pinned version for the server would
 # cause "incompatible file format" crashes on startup.
-OSRM_IMAGE="osrm/osrm-backend:v5.27.1"
+OSRM_IMAGE="ghcr.io/project-osrm/osrm-backend:v5.27.1"
 
 # Extract road network using our custom bus.lua profile
 docker run --rm -t -v "$OSRM_DIR:/data" $OSRM_IMAGE \
