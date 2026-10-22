@@ -14,10 +14,12 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('bus_stops', sa.Column('morning_order_index', sa.Integer(), nullable=True))
-    op.add_column('bus_stops', sa.Column('evening_order_index', sa.Integer(), nullable=True))
-    # Backfill from existing order_index — zero data loss
-    op.execute("UPDATE bus_stops SET morning_order_index = order_index, evening_order_index = order_index")
+    # Use IF NOT EXISTS so this is safe to run on servers where the k1f migration
+    # already added these columns (k1f was applied directly on prod but never committed).
+    op.execute("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS morning_order_index INTEGER")
+    op.execute("ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS evening_order_index INTEGER")
+    op.execute("UPDATE bus_stops SET morning_order_index = order_index WHERE morning_order_index IS NULL")
+    op.execute("UPDATE bus_stops SET evening_order_index = order_index WHERE evening_order_index IS NULL")
 
 
 def downgrade():
