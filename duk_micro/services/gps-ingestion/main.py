@@ -1041,14 +1041,31 @@ async def device_websocket(
         async with AsyncSessionLocal() as db:
             while True:
                 try:
-                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=300.0)
+                    # BUG3 FIX: tight 90s timeout (3× the 30s device ping interval).
+                    # If device is silent for 90s something is wrong; close so it
+                    # reconnects rather than holding a phantom connection for 5 min.
+                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=90.0)
                 except asyncio.TimeoutError:
-                    logger.warning("[GPS-INGEST] Device connection timed out")
-                    break
+                    # BUG1 FIX: send an application-level ping before giving up.
+                    # Device firmware responds to any receive; this also flushes the
+                    # WS layer so a server-side protocol ping/pong can complete.
+                    try:
+                        await asyncio.wait_for(
+                            websocket.send_json({"type": "ping"}), timeout=5.0
+                        )
+                        logger.debug("[GPS-INGEST] App-level ping sent (device silent >90s)")
+                        # Give device 30s to reply before declaring it dead
+                        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                    except Exception:
+                        logger.warning("[GPS-INGEST] Device timed out — closing connection")
+                        break
 
                 raw = raw.strip()
                 server_now = datetime.now(timezone.utc)
                 if not raw:
+                    continue
+                # Ignore pong replies to our ping
+                if raw in ('{"type":"pong"}', '{"type":"ping"}'):
                     continue
                 if len(raw) > 2048:
                     logger.warning("[GPS-INGEST] Oversized payload rejected (%d bytes)", len(raw))
