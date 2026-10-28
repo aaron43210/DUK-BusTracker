@@ -1041,30 +1041,19 @@ async def device_websocket(
         async with AsyncSessionLocal() as db:
             while True:
                 try:
-                    # BUG3 FIX: tight 90s timeout (3× the 30s device ping interval).
-                    # If device is silent for 90s something is wrong; close so it
-                    # reconnects rather than holding a phantom connection for 5 min.
-                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=90.0)
+                    # 300s: older firmware sends only WS control pings while it has
+                    # no GPS fix, which receive_text() never sees. Current firmware
+                    # sends a {"type":"ping"} text frame every 30s.
+                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=300.0)
                 except asyncio.TimeoutError:
-                    # BUG1 FIX: send an application-level ping before giving up.
-                    # Device firmware responds to any receive; this also flushes the
-                    # WS layer so a server-side protocol ping/pong can complete.
-                    try:
-                        await asyncio.wait_for(
-                            websocket.send_json({"type": "ping"}), timeout=5.0
-                        )
-                        logger.debug("[GPS-INGEST] App-level ping sent (device silent >90s)")
-                        # Give device 30s to reply before declaring it dead
-                        raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                    except Exception:
-                        logger.warning("[GPS-INGEST] Device timed out — closing connection")
-                        break
+                    logger.warning("[GPS-INGEST] Device silent for 300s — closing connection")
+                    break
 
                 raw = raw.strip()
                 server_now = datetime.now(timezone.utc)
                 if not raw:
                     continue
-                # Ignore pong replies to our ping
+                # Firmware keep-alive frames — they only reset the timeout above.
                 if raw in ('{"type":"pong"}', '{"type":"ping"}'):
                     continue
                 if len(raw) > 2048:
