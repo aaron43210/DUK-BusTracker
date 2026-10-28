@@ -32,6 +32,10 @@ class CommonSettings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = ""
+    # Gmail API (service account) — set these to use Gmail API instead of SMTP.
+    # GMAIL_SERVICE_ACCOUNT_PATH takes priority over SMTP_* when set.
+    GMAIL_SERVICE_ACCOUNT_PATH: str = ""
+    GMAIL_SENDER_EMAIL: str = ""
     ALLOWED_EMAIL_DOMAINS: str = "duk.ac.in,iiitmk.ac.in"
     ALLOWED_ORIGINS: str = ""
     OTP_TTL_SECONDS: int = 600

@@ -6,8 +6,10 @@ import socket
 import hmac
 import hashlib
 import email.utils
+import base64
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
 import sys
 import html
@@ -107,24 +109,38 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
 </body>
 </html>"""
 
-    # Format From header cleanly (e.g. "DUK Bus Tracker <email@duk.ac.in>")
+    subject = "Your DUK Bus Tracker Verification Code"
+
+    logger.info("[OTP] Sending verification email to %s", to_email)
+
+    # ── Gmail API path (preferred for Workspace domains) ──────────────────────
+    if settings.GMAIL_SERVICE_ACCOUNT_PATH and settings.GMAIL_SENDER_EMAIL:
+        try:
+            return _send_via_gmail_api(
+                settings.GMAIL_SERVICE_ACCOUNT_PATH,
+                settings.GMAIL_SENDER_EMAIL,
+                to_email,
+                subject,
+                html_body,
+            )
+        except Exception as e:
+            logger.error("[EMAIL] Gmail API failed, falling back to SMTP: %s", e)
+
+    # ── SMTP fallback ─────────────────────────────────────────────────────────
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("[EMAIL] No email method configured. OTP not sent.")
+        return False
+
     from_header = settings.SMTP_FROM or settings.SMTP_USER
-    # Pure email address for SMTP envelope MAIL FROM
     envelope_sender = email.utils.parseaddr(from_header)[1] or settings.SMTP_USER
 
     msg = MIMEText(html_body, "html")
-    msg["Subject"] = "Your DUK Bus Tracker Verification Code"
+    msg["Subject"] = subject
     msg["From"]    = from_header
     msg["To"]      = to_email
 
-    # Do NOT log the OTP — it is a secret credential.
-    # Logging it exposes it to anyone with access to application/container logs.
-    logger.info("[OTP] Sending verification email to %s", to_email)
-
     try:
-        # Resolve to IPv4 to prevent IPv6 connectivity issues with SMTP without monkey-patching
         smtp_ip = socket.gethostbyname(settings.SMTP_HOST)
-
         if settings.SMTP_PORT == 465:
             with smtplib.SMTP_SSL(smtp_ip, settings.SMTP_PORT, timeout=10) as server:
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
@@ -135,9 +151,39 @@ def send_otp_email(to_email: str, name: str, otp: str) -> bool:
                 server.starttls()
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
                 server.sendmail(envelope_sender, [to_email], msg.as_string())
-        logger.info("[EMAIL] OTP sent to %s", to_email)
+        logger.info("[EMAIL] OTP sent to %s via SMTP", to_email)
         return True
-
     except Exception as e:
-        logger.error("[EMAIL] Failed to send OTP to %s: %s", to_email, e)
+        logger.error("[EMAIL] SMTP failed for %s: %s", to_email, e)
         return False
+
+
+def _send_via_gmail_api(
+    service_account_path: str,
+    sender_email: str,
+    to_email: str,
+    subject: str,
+    html_body: str,
+) -> bool:
+    """Send email via Gmail API using a service account with domain-wide delegation."""
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    creds = service_account.Credentials.from_service_account_file(
+        service_account_path,
+        scopes=["https://www.googleapis.com/auth/gmail.send"],
+    )
+    # Impersonate the sender address (requires domain-wide delegation in Workspace admin)
+    delegated = creds.with_subject(sender_email)
+    service = build("gmail", "v1", credentials=delegated, cache_discovery=False)
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = sender_email
+    msg["To"]      = to_email
+    msg.attach(MIMEText(html_body, "html"))
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    logger.info("[EMAIL] OTP sent to %s via Gmail API", to_email)
+    return True
