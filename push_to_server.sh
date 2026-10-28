@@ -60,10 +60,26 @@ cd ..
 echo ""
 echo "[5/5] Running Backend Updates on Server (Alembic & Docker)..."
 ssh -t $SERVER "cd $SERVER_PATH && \
-  echo 'Rebuilding Docker Containers...' && \
-  sudo docker-compose down && \
-  sudo docker-compose build && \
-  sudo docker-compose up -d && \
+  echo 'Syncing live code into app_src...' && \
+  mkdir -p app_src/logs && \
+  rsync -a --delete \
+    --exclude '.env' --exclude '.env.*' --exclude '*firebase*' --exclude '*creds*' \
+    --exclude 'osrm-data/' --exclude 'models/' --exclude 'logs/' \
+    --exclude 'venv/' --exclude '.venv/' --exclude '__pycache__/' --exclude '.git/' \
+    --exclude 'tests/' --exclude 'docs/' \
+    duk_micro/ app_src/ && \
+  chmod 777 app_src/logs && \
+  DEPS_HASH=\$(cat duk_micro/requirements.txt duk_micro/Dockerfile | sha256sum | cut -d' ' -f1) && \
+  if [ \"\$DEPS_HASH\" != \"\$(cat .deps_hash 2>/dev/null)\" ]; then \
+    echo 'Dependencies changed — rebuilding image...' && \
+    sudo docker-compose build && \
+    sudo docker-compose up -d && \
+    echo \"\$DEPS_HASH\" > .deps_hash; \
+  else \
+    echo 'Dependencies unchanged — restarting services only...' && \
+    sudo docker-compose up -d && \
+    sudo docker-compose restart core-api background-workers; \
+  fi && \
   echo 'Fixing Postgres Table Ownership...' && \
   (cd /tmp && sudo -u postgres psql -d duk_bus -c \"ALTER TABLE scheduled_notifications OWNER TO duk_user; ALTER TABLE users OWNER TO duk_user; ALTER TABLE bus_stops OWNER TO duk_user;\" || true) && \
   echo 'Running Alembic Migrations...' && \

@@ -31,6 +31,9 @@ services:
       - ALLOW_LOOPBACK_SERVICES=true
     network_mode: "host"
     volumes:
+      # Live code: push_to_server.sh syncs it here, so a restart picks up new
+      # code without rebuilding the image (rebuild only when deps change).
+      - ./app_src:/app
       - ./duk_micro/models:/app/models
       - audit_logs:/app/logs
       - /opt/duk_micro/firebase_creds.json:/opt/duk_micro/firebase_creds.json:ro
@@ -46,6 +49,7 @@ services:
       - ALLOW_LOOPBACK_SERVICES=true
     network_mode: "host"
     volumes:
+      - ./app_src:/app
       - ./duk_micro/models:/app/models
       - /opt/duk_micro/firebase_creds.json:/opt/duk_micro/firebase_creds.json:ro
       - mlflow_data:/mlflow
