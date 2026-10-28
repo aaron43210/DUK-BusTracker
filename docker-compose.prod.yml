@@ -17,6 +17,9 @@ services:
     build:
       context: ./duk_micro
       dockerfile: Dockerfile
+      # Build on the host network: on the campus server the Docker bridge
+      # breaks TLS to PyPI (SSL EOF) while the host itself connects fine.
+      network: host
     restart: unless-stopped
     env_file:
       - /opt/duk_micro/.env
